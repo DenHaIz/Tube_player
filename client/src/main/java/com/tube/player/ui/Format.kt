@@ -57,6 +57,13 @@ object Format {
     private fun parseIso(text: String): Long? = runCatching { java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli() }.getOrNull()
         ?: runCatching { java.time.LocalDate.parse(text.take(10)).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
 
+    /** Дата комментария: относительная подпись YouTube как есть, ISO — пересчитываем. */
+    fun relative(text: String, at: Long, lang: AppLanguage, now: Long = System.currentTimeMillis()): String {
+        if (!IsoDate.containsMatchIn(text.trim())) return text
+        val millis = at.takeIf { it > 0 } ?: parseIso(text.trim()) ?: return text
+        return ago(millis, lang, now)
+    }
+
     /** «5 минут назад», «2 недели назад», «1 год назад» / «5 minutes ago». */
     fun ago(millis: Long, lang: AppLanguage, now: Long = System.currentTimeMillis()): String {
         val seconds = ((now - millis) / 1000).coerceAtLeast(0)

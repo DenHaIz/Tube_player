@@ -147,8 +147,8 @@ class PopupPlayer(
         if (shown) return
         // Окно проявляется плавно, когда в нём появился первый кадр, — без чёрной/белой вспышки и застывшей картинки.
         root.alpha = 0f
-        root.scaleX = 0.92f
-        root.scaleY = 0.92f
+        root.scaleX = 0.6f
+        root.scaleY = 0.6f
         runCatching { wm.addView(root, params) }.onFailure { return }
         shown = true
         texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -167,7 +167,14 @@ class PopupPlayer(
 
     private fun reveal() {
         if (!shown || root.alpha > 0f) return
-        root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
+        // Окно «вырастает» из правого нижнего угла.
+        root.pivotX = root.width.toFloat()
+        root.pivotY = root.height.toFloat()
+        root.animate()
+            .alpha(1f).scaleX(1f).scaleY(1f)
+            .setDuration(240)
+            .setInterpolator(android.view.animation.DecelerateInterpolator(2f))
+            .start()
     }
 
     fun hide() {

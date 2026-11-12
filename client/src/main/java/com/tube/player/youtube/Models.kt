@@ -49,6 +49,31 @@ data class PlaylistItem(
     val uploader: String? = null,
 ) : FeedItem
 
+/** Комментарий; [text] — HTML от YouTube, если [html]. */
+data class Comment(
+    val id: String,
+    val author: String,
+    val authorUrl: String? = null,
+    val avatar: String? = null,
+    val text: String,
+    val html: Boolean = false,
+    val likes: Int = 0,
+    val likesText: String? = null,
+    val date: String? = null,
+    val dateAt: Long = 0,
+    val replies: Int = 0,
+    val repliesPage: Page? = null,
+    val pinned: Boolean = false,
+    val hearted: Boolean = false,
+    val byOwner: Boolean = false,
+) {
+    /** Текст без разметки — для превью в одну-две строки. */
+    val plain: String get() = if (html) text.replace(Regex("<br\\s*/?>"), " ").replace(Regex("<[^>]+>"), "").replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">") else text
+}
+
+/** Страница комментариев: число всех комментариев и отключены ли они. */
+data class CommentsPage(val items: List<Comment>, val next: Page?, val count: Int, val disabled: Boolean)
+
 /** Страница выдачи и ключ следующей. */
 data class Paged<T>(val items: List<T>, val next: Page?)
 
@@ -63,6 +88,20 @@ fun videoId(url: String): String? {
 }
 
 fun watchUrl(id: String) = "https://www.youtube.com/watch?v=$id"
+
+/**
+ * Превью видео в HD: YouTube хранит `hq720` (1280×720) почти для всех видео, в WebP оно на треть легче JPEG
+ * того же качества. Первым пробуем его, затем — то, что отдал YouTube (у Shorts и старых видео hq720 может не быть).
+ */
+fun thumbnailCandidates(video: VideoItem): List<String> {
+    val id = videoId(video.url)
+    val hd = if (id != null && !video.live) "https://i.ytimg.com/vi_webp/$id/hq720.webp" else null
+    return listOfNotNull(hd, video.thumbnail).distinct()
+}
+
+/** Аватар yt3.ggpht.com в нужном размере (`=s88-…` → `=s176-…`), чтобы не растягивать маленькую картинку. */
+fun sharpAvatar(url: String, size: Int = 176): String =
+    if ("ggpht.com" in url || "googleusercontent.com" in url) url.replace(Regex("""=s\d+"""), "=s$size") else url
 
 /** Картинка подходящего размера: ближайшая не меньше [width], иначе самая большая. */
 fun List<Image>.best(width: Int = 720): String? {
@@ -81,7 +120,7 @@ internal fun InfoItem.toFeedItem(): FeedItem? = when (this) {
         channel = uploaderName,
         channelUrl = uploaderUrl,
         thumbnail = thumbnails.best(),
-        channelAvatar = uploaderAvatars.best(88),
+        channelAvatar = uploaderAvatars.best(88)?.let { sharpAvatar(it) },
         duration = duration.coerceAtLeast(0),
         views = viewCount,
         uploaded = textualUploadDate,
@@ -89,7 +128,7 @@ internal fun InfoItem.toFeedItem(): FeedItem? = when (this) {
         live = streamType == StreamType.LIVE_STREAM || streamType == StreamType.AUDIO_LIVE_STREAM,
         short = isShortFormContent || "/shorts/" in url,
     )
-    is ChannelInfoItem -> ChannelItem(url, name, thumbnails.best(176), subscriberCount, description)
+    is ChannelInfoItem -> ChannelItem(url, name, thumbnails.best(176)?.let { sharpAvatar(it, 264) }, subscriberCount, description)
     is PlaylistInfoItem -> PlaylistItem(url, name, thumbnails.best(), streamCount, uploaderName)
     else -> null
 }

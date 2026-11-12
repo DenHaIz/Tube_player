@@ -15,6 +15,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlin.math.roundToInt
+import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -316,22 +321,98 @@ fun QualitySheet(state: PlaybackState, onQuality: (Int?) -> Unit, onSpeed: (Floa
     Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SheetTitle(tr("Качество", "Quality"), if (state.currentHeight > 0) tr("Сейчас ", "Now ") + qualityLabel(state.currentHeight, state.currentFps) else null)
         SettingsCard(tr("Видео", "Video")) {
-            CenteredRow {
-                QualityChip(tr("Авто", "Auto"), state.selectedHeight == null) { onQuality(null) }
-                state.qualities.forEach { h -> QualityChip(qualityLabel(h), state.selectedHeight == h) { onQuality(h) } }
-            }
             if (state.qualities.isEmpty()) {
                 Text(tr("Это видео в одном качестве", "This video has a single quality"), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, modifier = Modifier.fillMaxWidth())
+            } else {
+                // Ползунок: слева «Авто», дальше качества по возрастанию; применяется, когда палец отпущен.
+                val stops = listOf<Int?>(null) + state.qualities.sortedBy { it }
+                var pos by remember(state.selectedHeight, stops) { mutableFloatStateOf(stops.indexOf(state.selectedHeight).coerceAtLeast(0).toFloat()) }
+                val current = stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]
+                SliderHeader(tr("Качество", "Quality"), current?.let { qualityLabel(it) } ?: tr("Авто", "Auto"))
+                TubeSlider(
+                    value = pos,
+                    onChange = { pos = it },
+                    range = 0f..stops.lastIndex.toFloat(),
+                    steps = (stops.size - 2).coerceAtLeast(0),
+                    onDone = { onQuality(stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]) },
+                )
+                SliderEnds(tr("Авто", "Auto"), qualityLabel(stops.last() ?: 0))
             }
         }
         SettingsCard(tr("Скорость", "Speed")) {
-            CenteredRow {
-                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f).forEach { sp ->
-                    QualityChip(if (sp == 1f) tr("Обычная", "Normal") else "${sp}×".replace(".0×", "×"), state.speed == sp) { onSpeed(sp) }
+            // 0,25×…3× с шагом 0,05; скорость меняется сразу, пока тянете.
+            var speed by remember(state.speed) { mutableFloatStateOf(state.speed) }
+            SliderHeader(tr("Скорость", "Speed"), if (speed == 1f) tr("Обычная", "Normal") else "%.2f×".format(java.util.Locale.ROOT, speed).replace(".00×", "×").replace("0×", "×"))
+            TubeSlider(
+                value = speed,
+                onChange = {
+                    speed = (Math.round(it * 20f) / 20f)
+                    onSpeed(speed)
+                },
+                range = 0.25f..3f,
+                steps = 0,
+                onDone = {},
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("0.25×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+                Spacer(Modifier.weight(1f))
+                if (speed != 1f) {
+                    Text(
+                        tr("Сбросить", "Reset"),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.accent,
+                        modifier = Modifier.bouncyClickable {
+                            speed = 1f
+                            onSpeed(1f)
+                        }.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                    Spacer(Modifier.weight(1f))
                 }
+                Text("3×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
             }
         }
     }
+}
+
+@Composable
+private fun SliderHeader(title: String, value: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = TubeTheme.colors.textPrimary, modifier = Modifier.weight(1f))
+        androidx.compose.animation.AnimatedContent(
+            value,
+            transitionSpec = { androidx.compose.animation.fadeIn(Anim.fade()) togetherWith androidx.compose.animation.fadeOut(Anim.out()) },
+            label = "sliderValue",
+        ) { v -> Text(v, style = MaterialTheme.typography.labelLarge, color = TubeTheme.colors.accent) }
+    }
+}
+
+@Composable
+private fun SliderEnds(start: String, end: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(start, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary)
+        Spacer(Modifier.weight(1f))
+        Text(end, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary)
+    }
+}
+
+/** Ползунок в цветах приложения. */
+@Composable
+private fun TubeSlider(value: Float, onChange: (Float) -> Unit, range: ClosedFloatingPointRange<Float>, steps: Int, onDone: () -> Unit) {
+    val colors = TubeTheme.colors
+    androidx.compose.material3.Slider(
+        value = value,
+        onValueChange = onChange,
+        valueRange = range,
+        steps = steps,
+        onValueChangeFinished = onDone,
+        colors = androidx.compose.material3.SliderDefaults.colors(
+            thumbColor = colors.accent,
+            activeTrackColor = colors.accent,
+            inactiveTrackColor = colors.chip,
+            activeTickColor = colors.onAccent.copy(alpha = 0.5f),
+            inactiveTickColor = colors.textTertiary.copy(alpha = 0.5f),
+        ),
+    )
 }
 
 @Composable

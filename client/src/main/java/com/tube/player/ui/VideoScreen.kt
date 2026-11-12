@@ -1,6 +1,11 @@
+@file:androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+
 package com.tube.player.ui
 
 import androidx.compose.animation.animateContentSize
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import com.tube.ui.theme.Shapes
 import androidx.compose.ui.unit.sp
@@ -78,6 +83,7 @@ class VideoActions(
     val onSeekTo: (Long) -> Unit,
     val onLike: () -> Unit = {},
     val onDislike: () -> Unit = {},
+    val onComments: () -> Unit = {},
 )
 
 /**
@@ -96,16 +102,75 @@ fun VideoScreen(
     disliked: Boolean = false,
     hideShorts: Boolean,
     modifier: Modifier = Modifier,
+    comments: CommentsModel? = null,
 ) {
-    BoxWithConstraints(modifier.fillMaxSize().background(TubeTheme.colors.background)) {
+    // Панель комментариев выезжает под плеером; «назад» сначала закрывает её.
+    var commentsOpen by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(enabled = commentsOpen) { commentsOpen = false }
+    val withComments = VideoActions(
+        onMinimize = actions.onMinimize, onFullscreen = actions.onFullscreen, onQuality = actions.onQuality, onPopup = actions.onPopup,
+        onPip = actions.onPip, onBackground = actions.onBackground, onShare = actions.onShare, onSkip = actions.onSkip,
+        onUndoSkip = actions.onUndoSkip, onRetry = actions.onRetry, onOpen = actions.onOpen, onChannel = actions.onChannel,
+        onSubscribe = actions.onSubscribe, onSeekTo = actions.onSeekTo, onLike = actions.onLike, onDislike = actions.onDislike,
+        onComments = { commentsOpen = true },
+    )
+    var offset by remember { mutableFloatStateOf(0f) }
+    var settling by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    BoxWithConstraints(
+        modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                // Только вниз: страница уезжает за пальцем, чуть уменьшаясь к нижнему краю и бледнея.
+                val f = (offset / size.height).coerceIn(0f, 1f)
+                translationY = offset.coerceAtLeast(0f)
+                val scale = 1f - 0.12f * f
+                scaleX = scale
+                scaleY = scale
+                alpha = 1f - 0.6f * f
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
+            }
+            .background(TubeTheme.colors.background),
+    ) {
         val landscape = maxWidth > maxHeight
         val wide = maxWidth >= 900.dp && landscape
+        val height = constraints.maxHeight.toFloat()
+        val threshold = with(density) { 96.dp.toPx() }
+        val swipeEnd: (Float) -> Unit = { total ->
+            if (!settling) {
+                scope.launch {
+                    settling = true
+                    when {
+                        fullscreen && total > threshold -> {
+                            actions.onFullscreen(false)
+                            androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
+                        }
+                        !fullscreen && total > threshold -> {
+                            // Доезжает вниз сам (быстро и плавно), затем страница становится мини-плеером.
+                            androidx.compose.animation.core.animate(offset, height, animationSpec = androidx.compose.animation.core.tween(180)) { v, _ -> offset = v }
+                            actions.onMinimize()
+                            offset = 0f
+                        }
+                        !fullscreen && total < -threshold -> {
+                            offset = 0f
+                            actions.onFullscreen(true)
+                        }
+                        else -> androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
+                    }
+                    settling = false
+                }
+            }
+        }
         val playerBox: @Composable (Modifier) -> Unit = { m ->
             PlayerView(
                 player, state, settings, fullscreen = fullscreen,
                 onFullscreen = actions.onFullscreen, onMinimize = actions.onMinimize, onQuality = actions.onQuality,
                 onPopup = actions.onPopup, onPip = actions.onPip, onSkip = actions.onSkip, onUndoSkip = actions.onUndoSkip,
                 onRetry = actions.onRetry, modifier = m,
+                // Во весь экран страница не сдвигается — свайп вниз просто выходит из него.
+                onSwipe = { dy -> if (!fullscreen && !settling) offset = dy.coerceAtLeast(0f) },
+                onSwipeEnd = swipeEnd,
             )
         }
         when {
@@ -113,32 +178,38 @@ fun VideoScreen(
             wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 LazyColumn(Modifier.weight(0.62f).fillMaxHeight(), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) }
-                    info(state, subscribed, actions, liked, disliked)
+                    info(state, subscribed, withComments, liked, disliked, comments)
                 }
-                LazyColumn(
-                    Modifier.weight(0.38f).fillMaxHeight(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                ) {
-                    related(state, hideShorts, actions)
+                Box(Modifier.weight(0.38f).fillMaxHeight()) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        related(state, hideShorts, actions)
+                    }
+                    CommentsLayer(commentsOpen, comments) { commentsOpen = false }
                 }
             }
             else -> Column(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxWidth().background(Color.Black).padding(WindowInsets.statusBars.asPaddingValues())) {
                     playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
                 }
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
-                ) {
-                    info(state, subscribed, actions, liked, disliked)
-                    related(state, hideShorts, actions, padded = true)
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
+                    ) {
+                        info(state, subscribed, withComments, liked, disliked, comments)
+                        related(state, hideShorts, actions, padded = true)
+                    }
+                    CommentsLayer(commentsOpen, comments) { commentsOpen = false }
                 }
             }
         }
     }
 }
 
-private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, actions: VideoActions, liked: Boolean, disliked: Boolean) {
+private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, actions: VideoActions, liked: Boolean, disliked: Boolean, comments: CommentsModel?) {
     val item = state.details?.item ?: state.item ?: return
     item(key = "title") {
         val lang = LocalLanguage.current
@@ -222,6 +293,7 @@ private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, action
                     }
                 }
             }
+            item { ActionPill(TubeIcons.Comment, tr("Комментарии", "Comments"), actions.onComments) }
             item { ActionPill(TubeIcons.Share, tr("Поделиться", "Share"), actions.onShare) }
             item { ActionPill(TubeIcons.Headphones, tr("Фон", "Background"), actions.onBackground) }
             item { ActionPill(TubeIcons.Popup, tr("Окно", "Window"), actions.onPopup) }
@@ -231,6 +303,20 @@ private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, action
     val details = state.details ?: return
     if (details.description.isNotBlank()) {
         item(key = "description") { Description(details, actions.onSeekTo) }
+    }
+    if (!details.item.live) item(key = "comments") { CommentsPreview(comments, actions.onComments) }
+}
+
+/** Слой комментариев поверх описания и похожих: выезжает снизу (под плеером остаётся видео). */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.CommentsLayer(open: Boolean, model: CommentsModel?, onClose: () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(
+        open && model != null,
+        modifier = Modifier.matchParentSize(),
+        enter = androidx.compose.animation.slideInVertically(Anim.move()) { it } + androidx.compose.animation.fadeIn(Anim.fade()),
+        exit = androidx.compose.animation.slideOutVertically(Anim.move()) { it } + androidx.compose.animation.fadeOut(Anim.out()),
+    ) {
+        model?.let { CommentsPanel(it, onClose) }
     }
 }
 
@@ -348,6 +434,7 @@ private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, act
 fun MiniPlayer(
     state: PlaybackState,
     playing: Boolean,
+    player: Player? = null,
     onExpand: () -> Unit,
     onPlayPause: () -> Unit,
     onClose: () -> Unit,
@@ -361,7 +448,18 @@ fun MiniPlayer(
             .bouncyClickable(pressedScale = 0.99f, onClick = onExpand),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        NetImage(item.thumbnail, Modifier.fillMaxHeight().aspectRatio(16f / 9f))
+        Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f).background(Color.Black)) {
+            if (player != null && !state.popup) {
+                androidx.media3.ui.compose.ContentFrame(
+                    player = player,
+                    modifier = Modifier.fillMaxSize(),
+                    surfaceType = androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                )
+            } else {
+                NetImage(com.tube.player.youtube.thumbnailCandidates(item), Modifier.fillMaxSize())
+            }
+        }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(item.title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = TubeTheme.colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)

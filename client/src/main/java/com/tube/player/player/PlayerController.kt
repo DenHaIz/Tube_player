@@ -320,13 +320,15 @@ class PlayerController(
     fun showPopup(onShown: () -> Unit = {}): Boolean {
         if (!PopupPlayer.canShow(context)) return false
         val window = popup ?: PopupPlayer(context, player, onExpand = { onExpandPopup() }, onClose = { close() }).also { popup = it }
-        _state.update { it.copy(popup = true) }
+        // Сначала — в фон (системная анимация, видео в приложении ещё играет), потом — окно.
+        onShown()
         scope.launch {
             delay(POPUP_HANDOVER_MS)
             window.show()
             if (!player.isPlaying) player.play()
             delay(POPUP_HANDOVER_MS)
-            onShown()
+            // Окно уже забрало плеер — экран приложения (уже скрытый) показывает обложку.
+            _state.update { it.copy(popup = true) }
         }
         return true
     }
@@ -344,7 +346,7 @@ class PlayerController(
     private fun describe(e: Throwable): String = e.message?.lineSequence()?.firstOrNull()?.take(200) ?: e.javaClass.simpleName
 }
 
-private const val POPUP_HANDOVER_MS = 120L
+private const val POPUP_HANDOVER_MS = 220L
 
 /** Подписи качества: «1080p», «720p60». */
 fun qualityLabel(height: Int, fps: Int = 0) = if (fps > 30) "${height}p$fps" else "${height}p"

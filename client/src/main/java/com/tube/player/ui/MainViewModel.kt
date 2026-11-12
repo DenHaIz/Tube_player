@@ -150,6 +150,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return all.sortedByDescending { it.uploadedAt }.distinctBy { it.url }.take(200)
     }
 
+    // Комментарии видео (по ссылке; модель живёт, пока жив экран).
+    private val commentModels = mutableMapOf<String, CommentsModel>()
+
+    fun comments(url: String): CommentsModel = commentModels.getOrPut(url) {
+        if (commentModels.size > 10) commentModels.remove(commentModels.keys.first())
+        CommentsModel(viewModelScope, repo, url)
+    }
+
     // Каналы и плейлисты
     private val channels = mutableMapOf<String, ChannelModel>()
 

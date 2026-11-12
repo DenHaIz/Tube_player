@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,7 @@ import com.tube.player.youtube.ChannelItem
 import com.tube.player.youtube.FeedItem
 import com.tube.player.youtube.PlaylistItem
 import com.tube.player.youtube.VideoItem
+import com.tube.player.youtube.thumbnailCandidates
 import com.tube.ui.components.PillButton
 import com.tube.ui.components.bouncyClickable
 import com.tube.ui.glass.liquidGlass
@@ -85,9 +87,28 @@ val LocalCardInset = staticCompositionLocalOf { 0.dp }
 
 /** Картинка из сети с мягкой подложкой, пока грузится (и в скриншотах, где сети нет). */
 @Composable
-fun NetImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
+fun NetImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) =
+    NetImage(listOfNotNull(url), modifier, contentScale)
+
+/**
+ * Картинка с запасными адресами: не загрузилась первая — пробуем следующую.
+ * Масштабирование — высокого качества: по умолчанию Compose сглаживает слабо, и уменьшенные превью «пикселят».
+ */
+@Composable
+fun NetImage(urls: List<String>, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
+    var index by androidx.compose.runtime.remember(urls) { androidx.compose.runtime.mutableIntStateOf(0) }
     Box(modifier.background(TubeTheme.colors.chip)) {
-        if (url != null) AsyncImage(model = url, contentDescription = null, contentScale = contentScale, modifier = Modifier.fillMaxSize())
+        val url = urls.getOrNull(index)
+        if (url != null) {
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = contentScale,
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+                onError = { if (index < urls.lastIndex) index++ },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -96,7 +117,7 @@ fun NetImage(url: String?, modifier: Modifier = Modifier, contentScale: ContentS
 fun Thumbnail(video: VideoItem, modifier: Modifier = Modifier, progress: Float = 0f) {
     val colors = TubeTheme.colors
     Box(modifier.aspectRatio(16f / 9f).clip(LocalThumbShape.current)) {
-        NetImage(video.thumbnail, Modifier.fillMaxSize())
+        NetImage(androidx.compose.runtime.remember(video.url, video.thumbnail) { thumbnailCandidates(video) }, Modifier.fillMaxSize())
         val badge = when {
             video.live -> tr("Эфир", "Live")
             video.short -> "Shorts"

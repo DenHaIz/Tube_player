@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -64,6 +63,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import androidx.media3.ui.compose.ContentFrame
+import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
+import androidx.compose.ui.draw.clipToBounds
 import com.tube.player.data.PlayerSettings
 import com.tube.player.player.PlaybackState
 import com.tube.player.player.qualityLabel
@@ -84,6 +85,8 @@ class PlayerProgress {
     var playing by mutableStateOf(false)
     var buffering by mutableStateOf(false)
     var ended by mutableStateOf(false)
+    /** Пропорции кадра (ширина / высота) — для расчёта «растянуть во весь экран». */
+    var aspect by mutableFloatStateOf(16f / 9f)
 }
 
 @Composable
@@ -96,6 +99,8 @@ fun rememberProgress(player: Player?): PlayerProgress {
                 progress.playing = p.isPlaying
                 progress.buffering = p.playbackState == Player.STATE_BUFFERING
                 progress.ended = p.playbackState == Player.STATE_ENDED
+                val v = p.videoSize
+                if (v.width > 0 && v.height > 0) progress.aspect = v.width * v.pixelWidthHeightRatio / v.height
             }
         }
         player.addListener(listener)
@@ -138,6 +143,10 @@ fun PlayerView(
     modifier: Modifier = Modifier,
     pipMode: Boolean = false,
     initiallyVisible: Boolean = false,
+    /** Палец тянет плеер по вертикали: смещение от начала жеста (px). */
+    onSwipe: (Float) -> Unit = {},
+    /** Палец отпущен: итоговое смещение (px); решение — свернуть, во весь экран или вернуть — за страницей. */
+    onSwipeEnd: (Float) -> Unit = {},
 ) {
     val progress = rememberProgress(player)
     var controls by remember { mutableStateOf(initiallyVisible) }
@@ -153,7 +162,6 @@ fun PlayerView(
     // Растянуть во весь экран без рамок (обрезая края) — только в полноэкранном режиме.
     var fill by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
-    val drag = remember { Animatable(0f) }
 
     LaunchedEffect(controls, touchedAt, progress.playing) {
         if (controls && progress.playing) {
@@ -175,6 +183,9 @@ fun PlayerView(
         }
     }
     LaunchedEffect(fullscreen) { if (!fullscreen) fill = false }
+    // Масштаб видео: 1 — вписано целиком, [fillScale] — заполняет экран (края обрезаются).
+    val zoom = remember { androidx.compose.animation.core.Animatable(1f) }
+    var pinching by remember { mutableStateOf(false) }
 
     fun seek(side: Int) {
         if (seekVisible && side != seekSide) seekTotal = 0
@@ -188,15 +199,22 @@ fun PlayerView(
 
     BoxWithConstraints(modifier.background(Color.Black)) {
         val width = constraints.maxWidth.toFloat()
-        // Видео или обложка; при смахивании видео плавно сдвигается за пальцем.
-        Box(Modifier.fillMaxSize().graphicsLayer { translationY = drag.value }) {
+        val boxAspect = constraints.maxWidth.toFloat() / constraints.maxHeight.coerceAtLeast(1)
+        val fillScale = if (fullscreen) maxOf(boxAspect / progress.aspect, progress.aspect / boxAspect).coerceIn(1f, 3f) else 1f
+        LaunchedEffect(fill, fillScale, pinching) {
+            if (!pinching) zoom.animateTo(if (fill && fullscreen) fillScale else 1f, androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 420f))
+        }
+        // Видео или обложка. TextureView, а не SurfaceView: поверхность SurfaceView — «дыра» под окном, она не обрезается
+        // и отстаёт от анимаций (при свайпе видео «проваливалось» под текст); TextureView движется вместе с экраном.
+        Box(Modifier.fillMaxSize().clipToBounds()) {
             when {
                 player != null && !state.popup -> ContentFrame(
                     player = player,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = if (fill && fullscreen) ContentScale.Crop else ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom.value; scaleY = zoom.value },
+                    surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
+                    contentScale = ContentScale.Fit,
                 )
-                else -> NetImage(state.item?.thumbnail, Modifier.fillMaxSize(), ContentScale.Fit)
+                else -> NetImage(state.item?.let { com.tube.player.youtube.thumbnailCandidates(it) }.orEmpty(), Modifier.fillMaxSize(), ContentScale.Fit)
             }
         }
         if (pipMode) return@BoxWithConstraints
@@ -219,41 +237,46 @@ fun PlayerView(
                     )
                 }
                 .pointerInput(fullscreen) {
-                    val threshold = 72.dp.toPx()
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)
                         var pan = Offset.Zero
-                        var zoom = 1f
+                        var pinchZoom = 1f
                         var vertical = false
                         var pinch = false
                         do {
                             val event = awaitPointerEvent()
                             if (event.changes.count { it.pressed } >= 2) {
                                 pinch = true
-                                zoom *= event.calculateZoom()
+                                pinchZoom *= event.calculateZoom()
                                 event.changes.forEach { it.consume() }
+                                if (fullscreen) {
+                                    // Видео следует за пальцами (с лёгким «резиновым» запасом за пределами).
+                                    pinching = true
+                                    val base = if (fill) fillScale else 1f
+                                    scope.launch { zoom.snapTo((base * pinchZoom).coerceIn(0.9f, fillScale * 1.1f)) }
+                                }
                             } else if (!pinch) {
                                 pan += event.calculatePan()
                                 if (!vertical && abs(pan.y) > viewConfiguration.touchSlop && abs(pan.y) > abs(pan.x) * 1.5f) vertical = true
                                 if (vertical) {
                                     event.changes.forEach { it.consume() }
-                                    scope.launch { drag.snapTo((pan.y * 0.45f).coerceIn(-threshold, threshold * 2)) }
+                                    onSwipe(pan.y)
                                 }
                             }
                         } while (event.changes.any { it.pressed })
                         when {
-                            pinch && fullscreen && zoom > 1.08f && !fill -> {
+                            pinch && fullscreen && pinchZoom > 1.05f && !fill -> {
                                 fill = true
                                 hint = lang.pick("Во весь экран", "Zoomed to fill")
                             }
-                            pinch && fullscreen && zoom < 0.93f && fill -> {
+                            pinch && fullscreen && pinchZoom < 0.95f && fill -> {
                                 fill = false
                                 hint = lang.pick("Исходный размер", "Original size")
                             }
-                            vertical && pan.y > threshold -> if (fullscreen) onFullscreen(false) else onMinimize()
-                            vertical && pan.y < -threshold && !fullscreen -> onFullscreen(true)
+                            vertical -> onSwipeEnd(pan.y)
                         }
-                        scope.launch { drag.animateTo(0f, Anim.move()) }
+                        // После щипка масштаб плавно доезжает до выбранного состояния.
+                        pinching = false
                     }
                 },
         )
@@ -408,8 +431,13 @@ private fun Controls(
             Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ControlIcon(if (fullscreen) TubeIcons.FullscreenExit else TubeIcons.ChevronDown, tr("Свернуть", "Minimize")) {
-                if (fullscreen) onFullscreen(false) else onMinimize()
+            if (fullscreen) {
+                ControlIcon(if (fill) TubeIcons.Shrink else TubeIcons.Expand, if (fill) tr("Исходный размер", "Original size") else tr("Растянуть", "Zoom to fill")) {
+                    onToggle()
+                    onFill()
+                }
+            } else {
+                ControlIcon(TubeIcons.ChevronDown, tr("Свернуть", "Minimize"), onClick = onMinimize)
             }
             Spacer(Modifier.weight(1f))
             ControlIcon(TubeIcons.Popup, tr("Плавающее окно", "Floating window"), onClick = onPopup)
@@ -449,14 +477,18 @@ private fun Controls(
             ControlIcon(TubeIcons.Forward, tr("Вперёд 10 с", "Forward 10 s"), size = 56) { onToggle(); player?.seekForward() }
         }
         // Снизу: время, полоса с отрезками SponsorBlock, полный экран.
-        Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(horizontal = 14.dp, vertical = 6.dp)) {
+        // Во весь экран полоса выше: снизу жестовая панель системы, и палец не должен цеплять её.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = if (fullscreen) 28.dp else 14.dp)
+                .padding(top = 6.dp, bottom = if (fullscreen) 36.dp else 6.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val live = state.item?.live == true
                 TimeLabel(progress, live)
                 Spacer(Modifier.weight(1f))
-                if (fullscreen) {
-                    ControlIcon(if (fill) TubeIcons.Shrink else TubeIcons.Expand, if (fill) tr("Исходный размер", "Original size") else tr("Растянуть", "Zoom to fill")) { onToggle(); onFill() }
-                }
                 ControlIcon(if (fullscreen) TubeIcons.FullscreenExit else TubeIcons.Fullscreen, tr("Во весь экран", "Fullscreen")) { onFullscreen(!fullscreen) }
             }
             if (state.item?.live != true) {

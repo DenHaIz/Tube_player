@@ -256,6 +256,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         onDislike = { (state.details?.item ?: state.item)?.let(vm::dislike) },
                     ),
                     hideShorts = hideShorts,
+                    comments = state.item?.url?.takeIf { it.isNotEmpty() }?.let { vm.comments(it) },
                     liked = state.item?.let { item -> liked.any { it.id == item.id } } == true,
                     disliked = state.item?.id?.let { it in disliked } == true,
                 )
@@ -485,7 +486,7 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
             ) {
                 Column {
                     MiniPlayer(
-                        state, progress.playing,
+                        state, progress.playing, playback.player,
                         onExpand = { vm.playerExpanded = true },
                         onPlayPause = { if (playback.player.isPlaying) playback.player.pause() else playback.player.play() },
                         onClose = onClose,

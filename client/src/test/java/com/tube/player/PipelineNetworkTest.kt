@@ -109,6 +109,17 @@ class PipelineNetworkTest {
     }
 
     @Test
+    fun commentsLoadWithRepliesPage() = runBlocking {
+        assumeTrue(System.getProperty("network") == "true")
+        val first = repo.comments(STABLE)
+        println("comments: count ${first.count}, page ${first.items.size}, first: ${first.items.firstOrNull()?.plain?.take(60)}")
+        assertTrue(first.items.isNotEmpty())
+        val more = first.next?.let { repo.comments(STABLE, it) }
+        println("comments page 2: ${more?.items?.size}")
+        assertTrue(more == null || more.items.isNotEmpty())
+    }
+
+    @Test
     fun sponsorBlockAndDislikesWork() = runBlocking {
         assumeTrue(System.getProperty("network") == "true")
         val segments = com.tube.player.sponsorblock.SponsorBlock { client }.segments("eXjGWlJOhWg")

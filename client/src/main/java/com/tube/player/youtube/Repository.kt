@@ -109,7 +109,7 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         val tab = info.tabs.firstOrNull { ChannelTabs.VIDEOS in it.contentFilters } ?: info.tabs.firstOrNull()
         val videos = tab?.let { runCatching { ChannelTabInfo.getInfo(yt, it) }.getOrNull() }
         ChannelPage(
-            channel = ChannelItem(info.url, info.name, info.avatars.best(176), info.subscriberCount, info.description),
+            channel = ChannelItem(info.url, info.name, info.avatars.best(176)?.let { sharpAvatar(it, 264) }, info.subscriberCount, info.description),
             banner = info.banners.best(1080),
             videos = Paged(videos?.relatedItems?.mapNotNull { it.toFeedItem() }.orEmpty(), videos?.nextPage),
             videosTab = tab,
@@ -130,6 +130,38 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
             val more = PlaylistInfo.getMoreItems(yt, url, page)
             header to Paged(more.items.mapNotNull { it.toFeedItem() }, more.nextPage)
         }
+    }
+
+    /** Комментарии видео: первая страница (с числом комментариев) или следующая/ответы по [page]. */
+    suspend fun comments(url: String, page: Page? = null): CommentsPage = io {
+        if (page == null) {
+            val info = org.schabi.newpipe.extractor.comments.CommentsInfo.getInfo(yt, url)
+            CommentsPage(info.relatedItems.map(::comment), info.nextPage, info.commentsCount, info.isCommentsDisabled)
+        } else {
+            val more = org.schabi.newpipe.extractor.comments.CommentsInfo.getMoreItems(yt, url, page)
+            CommentsPage(more.items.map(::comment), more.nextPage, -1, false)
+        }
+    }
+
+    private fun comment(c: org.schabi.newpipe.extractor.comments.CommentsInfoItem): Comment {
+        val text = c.commentText ?: Description.EMPTY_DESCRIPTION
+        return Comment(
+            id = c.commentId ?: (c.uploaderName + c.textualUploadDate + text.content.hashCode()),
+            author = c.uploaderName.orEmpty(),
+            authorUrl = c.uploaderUrl,
+            avatar = c.uploaderAvatars.best(96)?.let(::sharpAvatar),
+            text = text.content,
+            html = text.type == Description.Type.HTML,
+            likes = c.likeCount.coerceAtLeast(0),
+            likesText = c.textualLikeCount?.takeIf { it.isNotBlank() },
+            date = c.textualUploadDate,
+            dateAt = runCatching { c.uploadDate?.instant?.toEpochMilli() }.getOrNull() ?: 0,
+            replies = c.replyCount.coerceAtLeast(0),
+            repliesPage = c.replies,
+            pinned = c.isPinned,
+            hearted = c.isHeartedByUploader,
+            byOwner = c.isChannelOwner,
+        )
     }
 
     /** Свежие видео канала по RSS — лёгкий запрос для ленты подписок без аккаунта. */
@@ -162,7 +194,7 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
                 channel = info.uploaderName,
                 channelUrl = info.uploaderUrl,
                 thumbnail = info.thumbnails.best(1280),
-                channelAvatar = info.uploaderAvatars.best(88),
+                channelAvatar = info.uploaderAvatars.best(88)?.let { sharpAvatar(it) },
                 duration = info.duration.coerceAtLeast(0),
                 views = info.viewCount,
                 uploaded = info.textualUploadDate,

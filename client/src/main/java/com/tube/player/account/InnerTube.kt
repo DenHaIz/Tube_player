@@ -77,6 +77,7 @@ class InnerTube(private val client: () -> OkHttpClient, private val account: () 
     }
 
     suspend fun like(videoId: String) = post("like/like", JsonObject.builder().`object`("target").value("videoId", videoId).end().done())
+    suspend fun dislike(videoId: String) = post("like/dislike", JsonObject.builder().`object`("target").value("videoId", videoId).end().done())
     suspend fun removeLike(videoId: String) = post("like/removelike", JsonObject.builder().`object`("target").value("videoId", videoId).end().done())
     suspend fun subscribe(channelId: String) = post("subscription/subscribe", JsonObject.builder().array("channelIds").value(channelId).end().done())
     suspend fun unsubscribe(channelId: String) = post("subscription/unsubscribe", JsonObject.builder().array("channelIds").value(channelId).end().done())

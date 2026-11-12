@@ -73,6 +73,8 @@ object TubeIcons {
                 "1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
         )
     }
+    val Expand by lazy { icon("Expand", "M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7") }
+    val Shrink by lazy { icon("Shrink", "M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7") }
     val Bell by lazy { icon("Bell", "M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20.5a2 2 0 0 0 4 0") }
     val Trash by lazy { icon("Trash", "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13") }
 

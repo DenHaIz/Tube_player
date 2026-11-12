@@ -203,8 +203,9 @@ fun LibraryScreen(
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
     padding: PaddingValues,
+    liked: List<com.tube.player.youtube.VideoItem> = emptyList(),
 ) {
-    if (history.isEmpty()) {
+    if (history.isEmpty() && liked.isEmpty()) {
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
             Message(tr("История пуста", "History is empty"), tr("Здесь появятся видео, которые вы смотрели", "Videos you watch will appear here"), null, null)
         }
@@ -228,6 +229,10 @@ fun LibraryScreen(
                 if (resume.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle(tr("Продолжить просмотр", "Continue watching"), Modifier.padding(horizontal = inset)) }
                     historyItems(resume, "c", onOpen, onRemove)
+                }
+                if (liked.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle(tr("Понравившиеся", "Liked videos"), Modifier.padding(horizontal = inset)) }
+                    items(liked.size.coerceAtMost(12), key = { "l" + liked[it].id }) { i -> VideoCard(liked[i], onClick = { onOpen(liked[i]) }) }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(Modifier.fillMaxWidth().padding(start = inset), verticalAlignment = Alignment.CenterVertically) {

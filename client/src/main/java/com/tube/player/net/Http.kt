@@ -25,10 +25,23 @@ import java.util.concurrent.TimeUnit
 class BypassProxySelector(private val port: () -> Int?) : ProxySelector() {
     override fun select(uri: URI?): List<Proxy> {
         val p = port() ?: return listOf(Proxy.NO_PROXY)
+        // Через byedpi — только YouTube и Google: стратегии подобраны под них и могут ломать TLS других сайтов
+        // (SponsorBlock, Return YouTube Dislike не заблокированы — к ним напрямую, имена через DoH).
+        if (!needsBypass(uri?.host)) return listOf(Proxy.NO_PROXY)
         return listOf(Proxy(Proxy.Type.SOCKS, InetSocketAddress(Loopback4, p)))
     }
 
     companion object {
+        private val BypassDomains = listOf(
+            "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "ggpht.com", "googleusercontent.com",
+            "googleapis.com", "google.com", "gstatic.com", "youtube-nocookie.com", "youtubekids.com",
+        )
+
+        fun needsBypass(host: String?): Boolean {
+            val h = host?.lowercase()?.trimEnd('.') ?: return true
+            return BypassDomains.any { h == it || h.endsWith(".$it") }
+        }
+
         /**
          * Именно IPv4 127.0.0.1: byedpi слушает только его, а `InetAddress.getLoopbackAddress()` на части телефонов
          * отдаёт ::1 (ip6-localhost) — тогда все запросы приложения получали «Connection refused».

@@ -137,7 +137,22 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         FeedInfo.getInfo(yt, channelUrl).relatedItems.mapNotNull { it.toFeedItem() as? VideoItem }
     }
 
-    suspend fun video(url: String): VideoDetails = io { details(StreamInfo.getInfo(yt, url)) }
+    /**
+     * Видео: повторное открытие (из мини-плеера, истории, «назад») в течение [CACHE_MS] — без сети.
+     * Ссылки на потоки живут ~6 часов, поэтому кэш короткий; 403 всё равно переполучает данные ([fresh]).
+     */
+    suspend fun video(url: String, fresh: Boolean = false): VideoDetails {
+        val key = com.tube.player.youtube.videoId(url) ?: url
+        if (!fresh) cache[key]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.let { return it.second }
+        val details = io { details(StreamInfo.getInfo(yt, url)) }
+        synchronized(cache) {
+            cache[key] = System.currentTimeMillis() to details
+            while (cache.size > 30) cache.remove(cache.keys.first())
+        }
+        return details
+    }
+
+    private val cache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Pair<Long, VideoDetails>>())
 
     companion object {
         fun details(info: StreamInfo): VideoDetails {
@@ -168,6 +183,8 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
                 info = info,
             )
         }
+
+        private const val CACHE_MS = 30 * 60_000L
 
         private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
     }

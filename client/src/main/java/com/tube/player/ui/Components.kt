@@ -3,9 +3,11 @@ package com.tube.player.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -149,7 +151,7 @@ fun VideoCard(video: VideoItem, onClick: () -> Unit, modifier: Modifier = Modifi
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val meta = Format.meta(video.channel, Format.views(video.views, lang).takeIf { !video.live || video.views > 0 }, video.uploaded)
+                val meta = Format.meta(video.channel, Format.views(video.views, lang).takeIf { !video.live || video.views > 0 }, Format.uploaded(video, lang))
                 if (meta.isNotEmpty()) {
                     Text(
                         meta,
@@ -270,14 +272,16 @@ fun FeedGrid(
             ) {
                 header?.invoke(this)
                 when {
-                    state.loading && items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) { Loading(Modifier.padding(top = 48.dp)) }
+                    state.loading && items.isEmpty() -> items(if (phone) 3 else 8, key = { "skeleton$it" }) { SkeletonCard(Modifier.animateItem()) }
                     state.error != null && items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
                         Message(tr("Не удалось загрузить", "Couldn't load"), state.error, tr("Повторить", "Retry"), onRetry)
                     }
                     items.isEmpty() && empty != null -> item(span = { GridItemSpan(maxLineSpan) }) { Message(empty, null, null, null) }
                     else -> {
-                        items(items.size, key = { items[it].url }) { i ->
-                            AppearOnce { FeedItemCard(items[i], onOpen) }
+                        items(items.size, key = { items[it].url }, contentType = { items[it]::class }) { i ->
+                            Box(Modifier.animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())) {
+                                FeedItemCard(items[i], onOpen)
+                            }
                         }
                         if (state.loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { Loading(Modifier.padding(16.dp)) }
                     }
@@ -293,11 +297,31 @@ fun edgeToEdge(p: PaddingValues) = PaddingValues(top = p.calculateTopPadding(), 
 /** Заголовок карточки: 16sp средней насыщенности — как в YouTube, без мелкого шрифта. */
 val CardTitle = TextStyle(fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium)
 
-/** Плавное появление элемента списка (пружина масштаба + проявление). */
+/**
+ * Заготовка карточки, пока лента грузится: превью и две строки текста мягко «дышат».
+ * Одна бесконечная анимация на карточку и только пока виден скелетон — в покое ничего не перерисовывается.
+ */
 @Composable
-fun AppearOnce(content: @Composable () -> Unit) {
-    val shown = remember { androidx.compose.animation.core.MutableTransitionState(false).apply { targetState = true } }
-    AnimatedVisibility(shown, enter = fadeIn(Anim.fade()) + scaleIn(Anim.move(), initialScale = 0.97f)) { content() }
+fun SkeletonCard(modifier: Modifier = Modifier) {
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "skeleton")
+    val alpha by pulse.animateFloat(
+        0.45f, 0.9f,
+        androidx.compose.animation.core.infiniteRepeatable(tween(700), androidx.compose.animation.core.RepeatMode.Reverse),
+        label = "alpha",
+    )
+    val color = TubeTheme.colors.chip
+    Column(modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha }) {
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(LocalThumbShape.current).background(color))
+        Row(Modifier.fillMaxWidth().padding(top = 12.dp, start = LocalCardInset.current, end = LocalCardInset.current)) {
+            Box(Modifier.size(36.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Box(Modifier.fillMaxWidth(0.9f).height(16.dp).clip(RoundedCornerShape(6.dp)).background(color))
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth(0.55f).height(14.dp).clip(RoundedCornerShape(6.dp)).background(color))
+            }
+        }
+    }
 }
 
 @Composable

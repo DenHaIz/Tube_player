@@ -109,6 +109,17 @@ class PipelineNetworkTest {
     }
 
     @Test
+    fun sponsorBlockAndDislikesWork() = runBlocking {
+        assumeTrue(System.getProperty("network") == "true")
+        val segments = com.tube.player.sponsorblock.SponsorBlock { client }.segments("eXjGWlJOhWg")
+        println("SponsorBlock: $segments")
+        assertTrue(segments.isNotEmpty())
+        val votes = com.tube.player.sponsorblock.ReturnDislike { client }.votes("dQw4w9WgXcQ")
+        println("RYD: $votes")
+        assertTrue(votes != null && votes.dislikes > 0)
+    }
+
+    @Test
     fun exoPlayerPlaysDashThroughProxy() {
         assumeTrue(System.getProperty("network") == "true")
         val info = runBlocking { repo.video(STABLE).info!! }

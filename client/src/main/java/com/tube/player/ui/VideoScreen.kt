@@ -1,6 +1,7 @@
 package com.tube.player.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.ui.graphics.graphicsLayer
 import com.tube.ui.theme.Shapes
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +76,8 @@ class VideoActions(
     val onChannel: (ChannelItem) -> Unit,
     val onSubscribe: (ChannelItem) -> Unit,
     val onSeekTo: (Long) -> Unit,
+    val onLike: () -> Unit = {},
+    val onDislike: () -> Unit = {},
 )
 
 /**
@@ -89,6 +92,8 @@ fun VideoScreen(
     subscribed: Boolean,
     fullscreen: Boolean,
     actions: VideoActions,
+    liked: Boolean = false,
+    disliked: Boolean = false,
     hideShorts: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -108,7 +113,7 @@ fun VideoScreen(
             wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 LazyColumn(Modifier.weight(0.62f).fillMaxHeight(), contentPadding = PaddingValues(bottom = 24.dp)) {
                     item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) }
-                    info(state, subscribed, actions)
+                    info(state, subscribed, actions, liked, disliked)
                 }
                 LazyColumn(
                     Modifier.weight(0.38f).fillMaxHeight(),
@@ -125,7 +130,7 @@ fun VideoScreen(
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
                 ) {
-                    info(state, subscribed, actions)
+                    info(state, subscribed, actions, liked, disliked)
                     related(state, hideShorts, actions, padded = true)
                 }
             }
@@ -133,13 +138,13 @@ fun VideoScreen(
     }
 }
 
-private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, actions: VideoActions) {
+private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, actions: VideoActions, liked: Boolean, disliked: Boolean) {
     val item = state.details?.item ?: state.item ?: return
     item(key = "title") {
         val lang = LocalLanguage.current
         Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp)) {
             Text(item.title, style = VideoTitle, color = TubeTheme.colors.textPrimary, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            val meta = Format.meta(Format.views(item.views, lang), item.uploaded)
+            val meta = Format.meta(Format.views(item.views, lang), Format.uploaded(item, lang))
             if (meta.isNotEmpty()) {
                 Text(meta, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary, modifier = Modifier.padding(top = 4.dp))
             }
@@ -179,21 +184,40 @@ private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, action
             modifier = Modifier.fillMaxWidth(),
         ) {
             item {
-                // Лайки и дизлайки — одна разделённая кнопка, как в YouTube.
-                Row(Modifier.height(36.dp).background(TubeTheme.colors.chip, Shapes.Pill), verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.padding(start = 14.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(TubeIcons.ThumbUp, null, tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(20.dp))
+                // Лайки и дизлайки — одна разделённая кнопка, как в YouTube; нажатая половина — цвета акцента.
+                val colors = TubeTheme.colors
+                val likeTint by animateColorAsState(if (liked) colors.accent else colors.textPrimary, Anim.fade(), label = "like")
+                val likePop = remember { androidx.compose.animation.core.Animatable(1f) }
+                androidx.compose.runtime.LaunchedEffect(liked) {
+                    if (liked) {
+                        likePop.animateTo(1.3f, androidx.compose.animation.core.tween(110))
+                        likePop.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.45f, stiffness = 600f))
+                    }
+                }
+                val dislikeTint by animateColorAsState(if (disliked) colors.accent else colors.textPrimary, Anim.fade(), label = "dislike")
+                Row(Modifier.height(36.dp).background(colors.chip, Shapes.Pill), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxHeight().bouncyClickable(pressedScale = 0.92f, onClick = actions.onLike).padding(start = 14.dp, end = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            TubeIcons.ThumbUp, tr("Нравится", "Like"), tint = likeTint,
+                            modifier = Modifier.size(20.dp).graphicsLayer { scaleX = likePop.value; scaleY = likePop.value; rotationZ = (likePop.value - 1f) * -40f },
+                        )
                         state.details?.likes?.takeIf { it >= 0 }?.let {
                             Spacer(Modifier.width(6.dp))
-                            Text(Format.compact(it, lang), style = ActionText, color = TubeTheme.colors.textPrimary)
+                            Text(Format.compact(it + if (liked) 1 else 0, lang), style = ActionText, color = likeTint)
                         }
                     }
-                    Box(Modifier.width(1.dp).height(20.dp).background(TubeTheme.colors.textTertiary.copy(alpha = 0.4f)))
-                    Row(Modifier.padding(start = 12.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(TubeIcons.ThumbDown, null, tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(20.dp))
+                    Box(Modifier.width(1.dp).height(20.dp).background(colors.textTertiary.copy(alpha = 0.4f)))
+                    Row(
+                        Modifier.fillMaxHeight().bouncyClickable(pressedScale = 0.92f, onClick = actions.onDislike).padding(start = 12.dp, end = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(TubeIcons.ThumbDown, tr("Не нравится", "Dislike"), tint = dislikeTint, modifier = Modifier.size(20.dp))
                         state.dislikes?.let {
                             Spacer(Modifier.width(6.dp))
-                            Text(Format.compact(it, lang), style = ActionText, color = TubeTheme.colors.textPrimary)
+                            Text(Format.compact(it + if (disliked) 1 else 0, lang), style = ActionText, color = dislikeTint)
                         }
                     }
                 }
@@ -274,7 +298,7 @@ private fun Description(details: com.tube.player.youtube.VideoDetails, onSeek: (
             .padding(12.dp),
     ) {
         Text(
-            Format.meta(Format.views(details.item.views, lang), details.item.uploaded),
+            Format.meta(Format.views(details.item.views, lang), Format.uploaded(details.item, lang)),
             style = ActionText.copy(fontWeight = FontWeight.SemiBold),
             color = colors.textPrimary,
         )

@@ -80,6 +80,27 @@ class Library(context: Context) {
     val history = JsonListStore(dir, "history.json", ::encodeHistory, ::decodeHistory)
     val subscriptions = JsonListStore(dir, "subscriptions.json", ::encodeSubscription, ::decodeSubscription)
     val searches = JsonListStore(dir, "searches.json", { JSONObject().put("q", it) }, { it.optString("q").ifEmpty { null } })
+    /** Понравившиеся (лайк работает и без аккаунта; при входе — ещё и на YouTube). */
+    val liked = JsonListStore(dir, "liked.json", ::encodeVideo, ::decodeVideo)
+    val disliked = JsonListStore(dir, "disliked.json", { JSONObject().put("id", it) }, { it.optString("id").ifEmpty { null } })
+
+    fun isLiked(id: String) = liked.items.value.any { it.id == id }
+    fun isDisliked(id: String) = id in disliked.items.value
+
+    /** Лайк: включить или снять; дизлайк при этом снимается. Возвращает новое состояние. */
+    fun toggleLike(video: VideoItem): Boolean {
+        val now = !isLiked(video.id)
+        liked.update { list -> if (now) listOf(video) + list.filter { it.id != video.id } else list.filter { it.id != video.id } }
+        if (now) disliked.update { list -> list - video.id }
+        return now
+    }
+
+    fun toggleDislike(video: VideoItem): Boolean {
+        val now = !isDisliked(video.id)
+        disliked.update { list -> if (now) list + video.id else list - video.id }
+        if (now) liked.update { list -> list.filter { it.id != video.id } }
+        return now
+    }
 
     /** Отметить просмотр: видео поднимается наверх истории, позиция сохраняется. */
     fun watched(video: VideoItem, positionMs: Long = 0, durationMs: Long = 0) = history.update { list ->

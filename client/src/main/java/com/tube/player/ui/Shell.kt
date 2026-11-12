@@ -81,7 +81,6 @@ import com.tube.ui.theme.Shapes
 import com.tube.ui.theme.TubeIcons
 import com.tube.ui.theme.TubeTheme
 import com.tube.strategy.NetworkKind
-import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 
 enum class Sheet { None, Settings, Bypass, Quality, Account, Update }
@@ -124,6 +123,8 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
     val subscriptions by vm.subscriptions.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
     val searches by vm.searches.collectAsStateWithLifecycle()
+    val liked by vm.liked.collectAsStateWithLifecycle()
+    val disliked by vm.disliked.collectAsStateWithLifecycle()
     val bypass by vm.bypassStatus.collectAsStateWithLifecycle()
     val update by vm.update.collectAsStateWithLifecycle()
     val route = vm.stack.lastOrNull()
@@ -137,7 +138,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
 
     CompositionLocalProvider(LocalHazeState provides hazeState) {
         Box(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().background(TubeTheme.colors.background).hazeSource(hazeState, zIndex = 0f))
+            Box(Modifier.fillMaxSize().background(TubeTheme.colors.background))
 
             val insets = WindowInsets.safeDrawing.asPaddingValues()
             val dir = LocalLayoutDirection.current
@@ -148,7 +149,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                 bottom = insets.calculateBottomPadding() + BottomBarHeight + (if (hasMini) MiniHeight else 0.dp) + 8.dp,
             )
             val key: Any = route ?: vm.tab
-            Box(Modifier.fillMaxSize().hazeSource(hazeState, zIndex = 1f)) {
+            Box(Modifier.fillMaxSize()) {
                 AnimatedContent(
                     key,
                     transitionSpec = {
@@ -179,7 +180,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                                 onSignIn = { sheet = Sheet.Account }, padding = padding, hideShorts = hideShorts,
                             )
                         }
-                        Tab.Library -> LibraryScreen(history, vm::open, { container.library.removeHistory(it) }, { container.library.clearHistory() }, padding)
+                        Tab.Library -> LibraryScreen(history, vm::open, { container.library.removeHistory(it) }, { container.library.clearHistory() }, padding, liked)
                         Route.Search -> SearchScreen(
                             vm.query, vm.searchFilter, vm.searchFeed?.state, vm.suggestions, searches,
                             onSearch = { vm.submitSearch(it) }, onRemoveHistory = { container.library.removeSearch(it) },
@@ -251,8 +252,12 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         onChannel = { vm.open(it) },
                         onSubscribe = vm::toggleSubscription,
                         onSeekTo = { playback.player.seekTo(it) },
+                        onLike = { (state.details?.item ?: state.item)?.let(vm::like) },
+                        onDislike = { (state.details?.item ?: state.item)?.let(vm::dislike) },
                     ),
                     hideShorts = hideShorts,
+                    liked = state.item?.let { item -> liked.any { it.id == item.id } } == true,
+                    disliked = state.item?.id?.let { it in disliked } == true,
                 )
             }
 
@@ -514,10 +519,11 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
+                        val pill by animateColorAsState(if (selected) colors.accent.copy(alpha = 0.16f) else Color.Transparent, Anim.fade(), label = "tabPill")
                         Box(
                             Modifier
                                 .size(width = 56.dp, height = 28.dp)
-                                .background(if (selected) colors.accent.copy(alpha = 0.16f) else Color.Transparent, Shapes.Pill),
+                                .background(pill, Shapes.Pill),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(

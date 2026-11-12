@@ -238,6 +238,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val subscriptions = container.library.subscriptions.items
     val history = container.library.history.items
     val searches = container.library.searches.items
+    val liked = container.library.liked.items
+    val disliked = container.library.disliked.items
+
+    /** Лайк/дизлайк: сразу в библиотеке, а при входе в аккаунт — ещё и на YouTube (в фоне). */
+    fun like(video: VideoItem) {
+        val on = container.library.toggleLike(video)
+        syncRating(video.id) { if (on) container.innerTube.like(it) else container.innerTube.removeLike(it) }
+    }
+
+    fun dislike(video: VideoItem) {
+        val on = container.library.toggleDislike(video)
+        syncRating(video.id) { if (on) container.innerTube.dislike(it) else container.innerTube.removeLike(it) }
+    }
+
+    private fun syncRating(id: String, call: suspend (String) -> Unit) {
+        if (account.value == null) return
+        viewModelScope.launch { runCatching { call(id) } }
+    }
 
     fun isSubscribed(url: String?) = container.library.isSubscribed(url)
 

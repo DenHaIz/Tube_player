@@ -161,8 +161,6 @@ fun SettingsSheet(
             Gap()
             ToggleRow(tr("Картинка в картинке", "Picture-in-picture"), tr("Видео в окошке при выходе на рабочий стол", "Small window when you go home"), s.autoPip) { v -> edit { setAutoPip(v) } }
             Gap()
-            ToggleRow(tr("Жесты", "Gestures"), tr("Яркость и громкость свайпом во весь экран", "Swipe for brightness and volume in fullscreen"), s.gestures) { v -> edit { setGestures(v) } }
-            Gap()
             ToggleRow(tr("Запоминать скорость", "Remember speed"), null, s.rememberSpeed) { v -> edit { setRememberSpeed(v) } }
         }
 

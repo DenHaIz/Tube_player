@@ -239,9 +239,8 @@ class MainActivity : ComponentActivity() {
 
     /** Плавающее окно; без разрешения «Поверх других приложений» — открыть его настройку. */
     private fun openPopup() {
-        if (container.playback.showPopup()) {
+        if (container.playback.showPopup(onShown = { moveTaskToBack(true) })) {
             vm.playerExpanded = false
-            moveTaskToBack(true)
         } else {
             runCatching {
                 startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))

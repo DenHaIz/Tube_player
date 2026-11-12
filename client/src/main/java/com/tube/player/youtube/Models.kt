@@ -65,7 +65,7 @@ fun videoId(url: String): String? {
 fun watchUrl(id: String) = "https://www.youtube.com/watch?v=$id"
 
 /** Картинка подходящего размера: ближайшая не меньше [width], иначе самая большая. */
-fun List<Image>.best(width: Int = 480): String? {
+fun List<Image>.best(width: Int = 720): String? {
     if (isEmpty()) return null
     val sized = filter { it.width > 0 }
     val pick = sized.filter { it.width >= width }.minByOrNull { it.width }

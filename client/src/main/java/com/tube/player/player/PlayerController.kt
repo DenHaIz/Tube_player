@@ -77,6 +77,13 @@ class PlayerController(
     private val qualityCap: () -> Int,
 ) {
     val player: ExoPlayer = ExoPlayer.Builder(context)
+        // Старт после ~1 с буфера (по умолчанию 2,5 с), после остановки — 2 с; дальше копим до 50 с.
+        .setLoadControl(
+            androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15_000, 50_000, 1_000, 2_000)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build(),
+        )
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_NETWORK)
@@ -261,7 +268,7 @@ class PlayerController(
             retried = true
             val position = player.currentPosition
             loadJob = scope.launch {
-                val fresh = runCatching { repo.video(details.item.url) }.getOrNull()
+                val fresh = runCatching { repo.video(details.item.url, fresh = true) }.getOrNull()
                 if (fresh != null) prepare(fresh, position) else _state.update { it.copy(error = describe(error)) }
             }
             return
@@ -305,12 +312,22 @@ class PlayerController(
         controller = MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync()
     }
 
-    fun showPopup(): Boolean {
+    /**
+     * Плавающее окно. Порядок важен: сначала экран отдаёт поверхность (popup = true → вместо видео обложка),
+     * через кадр окно забирает плеер себе и проявляется по первому кадру; [onShown] — когда окно уже на экране
+     * (тогда приложение можно убирать в фон без белой вспышки и застывшей картинки).
+     */
+    fun showPopup(onShown: () -> Unit = {}): Boolean {
         if (!PopupPlayer.canShow(context)) return false
         val window = popup ?: PopupPlayer(context, player, onExpand = { onExpandPopup() }, onClose = { close() }).also { popup = it }
-        window.show()
         _state.update { it.copy(popup = true) }
-        if (!player.isPlaying) player.play()
+        scope.launch {
+            delay(POPUP_HANDOVER_MS)
+            window.show()
+            if (!player.isPlaying) player.play()
+            delay(POPUP_HANDOVER_MS)
+            onShown()
+        }
         return true
     }
 
@@ -326,6 +343,8 @@ class PlayerController(
 
     private fun describe(e: Throwable): String = e.message?.lineSequence()?.firstOrNull()?.take(200) ?: e.javaClass.simpleName
 }
+
+private const val POPUP_HANDOVER_MS = 120L
 
 /** Подписи качества: «1080p», «720p60». */
 fun qualityLabel(height: Int, fps: Int = 0) = if (fps > 30) "${height}p$fps" else "${height}p"

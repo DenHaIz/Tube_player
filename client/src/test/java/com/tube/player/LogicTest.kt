@@ -163,6 +163,43 @@ class LogicTest {
     }
 
     @Test
+    fun onlyYoutubeGoesThroughBypass() {
+        val net = com.tube.player.net.BypassProxySelector
+        assertTrue(net.needsBypass("rr3---sn-abc.googlevideo.com"))
+        assertTrue(net.needsBypass("www.youtube.com"))
+        assertTrue(net.needsBypass("i.ytimg.com"))
+        assertTrue(net.needsBypass("accounts.google.com"))
+        assertFalse(net.needsBypass("sponsor.ajay.app"))
+        assertFalse(net.needsBypass("returnyoutubedislikeapi.com"))
+        assertFalse(net.needsBypass("notyoutube.com"))
+    }
+
+    @Test
+    fun uploadDateIsRelative() {
+        val now = java.time.OffsetDateTime.parse("2026-11-12T12:00:00Z").toInstant().toEpochMilli()
+        val iso = VideoItem("u", "t", uploaded = "2026-11-09T08:00:00+00:00")
+        assertEquals("3 дня назад", Format.uploaded(iso, AppLanguage.Russian, now))
+        assertEquals("3 days ago", Format.uploaded(iso, AppLanguage.English, now))
+        assertEquals("2 недели назад", Format.uploaded(VideoItem("u", "t", uploaded = "2026-10-29"), AppLanguage.Russian, now))
+        assertEquals("1 год назад", Format.uploaded(VideoItem("u", "t", uploadedAt = now - 400L * 86_400_000), AppLanguage.Russian, now))
+        assertEquals("5 дней назад", Format.uploaded(VideoItem("u", "t", uploaded = "5 дней назад"), AppLanguage.Russian, now))
+    }
+
+    @Test
+    fun likeAndDislikeAreExclusive() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val library = Library(context)
+        val v = VideoItem("https://www.youtube.com/watch?v=CCCCCCCCCCC", "Three")
+        assertTrue(library.toggleLike(v))
+        assertTrue(library.isLiked(v.id))
+        assertTrue(library.toggleDislike(v))
+        assertFalse(library.isLiked(v.id))
+        assertTrue(library.isDisliked(v.id))
+        assertFalse(library.toggleDislike(v))
+        assertFalse(library.isDisliked(v.id))
+    }
+
+    @Test
     fun adBlockHostsAndPaths() {
         assertTrue(AdBlock.isBlocked("pagead2.googlesyndication.com", "/x"))
         assertTrue(AdBlock.isBlocked("www.youtube.com", "/pagead/viewthroughconversion"))

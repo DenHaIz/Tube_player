@@ -145,12 +145,29 @@ class PopupPlayer(
 
     fun show() {
         if (shown) return
+        // Окно проявляется плавно, когда в нём появился первый кадр, — без чёрной/белой вспышки и застывшей картинки.
+        root.alpha = 0f
+        root.scaleX = 0.92f
+        root.scaleY = 0.92f
         runCatching { wm.addView(root, params) }.onFailure { return }
         shown = true
+        texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: android.graphics.SurfaceTexture, width: Int, height: Int) = Unit
+            override fun onSurfaceTextureSizeChanged(surface: android.graphics.SurfaceTexture, width: Int, height: Int) = Unit
+            override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture) = true
+            override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) = reveal()
+        }
         player.setVideoTextureView(texture)
         player.addListener(listener)
         listener.onIsPlayingChanged(player.isPlaying)
         fitAspect()
+        // На паузе новых кадров может не быть — проявить всё равно.
+        root.postDelayed({ reveal() }, 450)
+    }
+
+    private fun reveal() {
+        if (!shown || root.alpha > 0f) return
+        root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
     }
 
     fun hide() {

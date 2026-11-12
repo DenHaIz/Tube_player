@@ -63,8 +63,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
-import androidx.media3.ui.compose.ContentFrame
-import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
 import androidx.compose.ui.draw.clipToBounds
 import com.tube.player.data.PlayerSettings
 import com.tube.player.player.PlaybackState
@@ -210,11 +208,11 @@ fun PlayerView(
         // и отстаёт от анимаций (при свайпе видео «проваливалось» под текст); TextureView движется вместе с экраном.
         Box(Modifier.fillMaxSize().clipToBounds()) {
             when {
-                player != null && !state.popup -> ContentFrame(
-                    player = player,
-                    modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom.value; scaleY = zoom.value },
-                    surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
-                    contentScale = ContentScale.Fit,
+                player != null && !state.popup -> VideoSurface(
+                    player,
+                    progress.aspect,
+                    Modifier.fillMaxSize().graphicsLayer { scaleX = zoom.value; scaleY = zoom.value },
+                    placeholder = state.item?.let { com.tube.player.youtube.thumbnailCandidates(it) }.orEmpty(),
                 )
                 else -> NetImage(state.item?.let { com.tube.player.youtube.thumbnailCandidates(it) }.orEmpty(), Modifier.fillMaxSize(), ContentScale.Fit)
             }
@@ -225,17 +223,27 @@ fun PlayerView(
             Modifier
                 .fillMaxSize()
                 .pointerInput(player) {
+                    // Двойной тап распознаётся сами, без onDoubleTap: тот задерживает одиночный тап на ~0,3 с,
+                    // и контролы появлялись с запозданием. Теперь первый тап показывает их сразу, а второй
+                    // в той же половине в пределах 300 мс — перемотка (контролы при этом прячутся).
+                    var lastTapAt = 0L
+                    var lastTapSide = 0
                     detectTapGestures(
                         onTap = { offset ->
-                            // Сразу после двойного тапа одиночные тапы продолжают перемотку, как в YouTube.
-                            if (seekVisible && System.currentTimeMillis() - seekAt < 800) {
-                                seek(if (offset.x > width / 2) 1 else -1)
-                            } else {
-                                controls = !controls
-                                touchedAt = System.currentTimeMillis()
+                            val side = if (offset.x > width / 2) 1 else -1
+                            val now = System.currentTimeMillis()
+                            when {
+                                // Сразу после двойного тапа одиночные тапы продолжают перемотку, как в YouTube.
+                                seekVisible && now - seekAt < 800 -> seek(side)
+                                now - lastTapAt < DoubleTapMs && side == lastTapSide -> seek(side)
+                                else -> {
+                                    controls = !controls
+                                    touchedAt = now
+                                }
                             }
+                            lastTapAt = now
+                            lastTapSide = side
                         },
-                        onDoubleTap = { offset -> seek(if (offset.x > width / 2) 1 else -1) },
                     )
                 }
                 .onGloballyPositioned { gestureCoords = it }
@@ -338,7 +346,7 @@ fun PlayerView(
             ThinProgress(progress, visibleSegments(state, settings))
         }
 
-        AnimatedVisibility(controls && state.error == null, Modifier.fillMaxSize(), enter = fadeIn(Anim.fade()), exit = fadeOut(Anim.out())) {
+        AnimatedVisibility(controls && state.error == null, Modifier.fillMaxSize(), enter = fadeIn(androidx.compose.animation.core.tween(90)), exit = fadeOut(Anim.out())) {
             Controls(
                 player, state, progress, fullscreen,
                 onToggle = { touchedAt = System.currentTimeMillis() },
@@ -426,6 +434,8 @@ private fun ThinProgress(progress: PlayerProgress, segments: List<com.tube.playe
 /** Отрезки SponsorBlock, которые видны на полосе (категория не выключена). */
 private fun visibleSegments(state: PlaybackState, settings: PlayerSettings) =
     if (settings.sponsorBlock) state.segments.filter { settings.sponsor[it.category] != SegmentAction.Off } else emptyList()
+
+private const val DoubleTapMs = 300L
 
 private val RoundedPill = androidx.compose.foundation.shape.RoundedCornerShape(50)
 

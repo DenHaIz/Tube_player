@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,23 +105,27 @@ fun SettingsSheet(
     onBypass: () -> Unit,
     onUpdates: () -> Unit = {},
 ) {
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // Все разделы свёрнуты в «шторки»: лист открывается коротким списком, нужный раздел раскрывается по нажатию.
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SheetTitle(tr("Настройки", "Settings"), "Tube Player ${BuildConfig.VERSION_NAME}")
 
-        SettingsCard(tr("Аккаунт", "Account")) {
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+        SettingsShutter(tr("Аккаунт", "Account")) {
+            // Профиль — по центру под названием раздела.
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (account != null) {
                     Avatar(account.avatar, 56.dp)
-                    Text(account.name ?: tr("Аккаунт Google", "Google account"), style = MaterialTheme.typography.titleMedium, color = TubeTheme.colors.textPrimary)
+                    Spacer(Modifier.height(6.dp))
+                    Text(account.name ?: tr("Аккаунт Google", "Google account"), style = MaterialTheme.typography.titleMedium, color = TubeTheme.colors.textPrimary, textAlign = TextAlign.Center)
+                    account.handle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary, textAlign = TextAlign.Center) }
                 } else {
-                    Text(tr("Необязательно: рекомендации и подписки аккаунта", "Optional: your recommendations and subscriptions"), style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary)
+                    Text(tr("Необязательно: рекомендации и подписки аккаунта", "Optional: your recommendations and subscriptions"), style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary, textAlign = TextAlign.Center)
                 }
                 Spacer(Modifier.height(8.dp))
                 PillButton(if (account != null) tr("Управление", "Manage") else tr("Войти в Google", "Sign in with Google"), onClick = onAccount, icon = TubeIcons.Account, compact = true)
             }
         }
 
-        SettingsCard(tr("Обход блокировок", "Unblocking")) {
+        SettingsShutter(tr("Обход блокировок", "Unblocking")) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
                 Segmented(BypassMode.entries, s.bypass, { if (it == BypassMode.Auto) tr("Встроенный", "Built-in") else tr("Выключен", "Off") }, { m -> edit { setBypass(m) } })
                 Spacer(Modifier.height(8.dp))
@@ -134,7 +139,7 @@ fun SettingsSheet(
             }
         }
 
-        SettingsCard(tr("Вид", "Appearance")) {
+        SettingsShutter(tr("Вид", "Appearance")) {
             Label(tr("Тема", "Theme"))
             Segmented(ThemeMode.entries, s.theme, {
                 when (it) {
@@ -154,7 +159,7 @@ fun SettingsSheet(
             Segmented(AppLanguage.entries, s.language, { it.title }, { l -> edit { setLanguage(l) } })
         }
 
-        SettingsCard(tr("Воспроизведение", "Playback")) {
+        SettingsShutter(tr("Воспроизведение", "Playback")) {
             val caps = listOf(QualityCap.Auto, QualityCap.P1080, QualityCap.P720, QualityCap.P480, QualityCap.P360)
             Label(tr("Качество по Wi-Fi", "Quality on Wi-Fi"))
             Segmented(caps, s.qualityWifi, { qualityCapLabel(it) }, { q -> edit { setQualityWifi(q) } })
@@ -169,7 +174,7 @@ fun SettingsSheet(
             ToggleRow(tr("Запоминать скорость", "Remember speed"), null, s.rememberSpeed) { v -> edit { setRememberSpeed(v) } }
         }
 
-        SettingsCard(tr("Без рекламы", "No ads")) {
+        SettingsShutter(tr("Без рекламы", "No ads")) {
             ToggleRow(tr("Блокировщик рекламы", "Ad blocker"), tr("Без роликов, промо и рекламных запросов", "No ad videos, promos or ad requests"), s.adBlock) { v -> edit { setAdBlock(v) } }
             Gap()
             ToggleRow(tr("Скрывать Shorts", "Hide Shorts"), null, s.hideShorts) { v -> edit { setHideShorts(v) } }
@@ -177,13 +182,13 @@ fun SettingsSheet(
             ToggleRow(tr("Дизлайки", "Dislikes"), "Return YouTube Dislike", s.returnDislikes) { v -> edit { setReturnDislikes(v) } }
         }
 
-        SettingsCard(tr("Обновления", "Updates")) {
+        SettingsShutter(tr("Обновления", "Updates")) {
             ToggleRow(tr("Проверять при запуске", "Check on launch"), tr("GitHub, при недоступности — зеркала", "GitHub, mirrors if it's unreachable"), s.autoUpdate) { v -> edit { setAutoUpdate(v) } }
             Gap()
             PillButton(tr("Проверить обновления", "Check for updates"), onClick = onUpdates, icon = TubeIcons.Bolt, compact = true)
         }
 
-        SettingsCard("SponsorBlock") {
+        SettingsShutter("SponsorBlock") {
             ToggleRow(tr("Пропускать вставки", "Skip segments"), tr("Спонсоры, заставки, просьбы подписаться", "Sponsors, intros, reminders"), s.sponsorBlock) { v -> edit { setSponsorBlock(v) } }
             if (s.sponsorBlock) {
                 SponsorCategory.entries.forEach { category ->
@@ -314,64 +319,102 @@ fun BypassSheet(
     }
 }
 
-/** Качество и скорость. */
+/**
+ * Качество и скорость. Невысокий экран (полноэкранный режим, телефон боком) — без заголовка, оба ползунка
+ * рядом в одну строку: лист маленький и не листается; иначе — друг под другом.
+ */
 @Composable
 fun QualitySheet(state: PlaybackState, onQuality: (Int?) -> Unit, onSpeed: (Float) -> Unit) {
-    val colors = TubeTheme.colors
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SheetTitle(tr("Качество", "Quality"), if (state.currentHeight > 0) tr("Сейчас ", "Now ") + qualityLabel(state.currentHeight, state.currentFps) else null)
-        SettingsCard(tr("Видео", "Video")) {
-            if (state.qualities.isEmpty()) {
-                Text(tr("Это видео в одном качестве", "This video has a single quality"), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, modifier = Modifier.fillMaxWidth())
-            } else {
-                // Ползунок: слева «Авто», дальше качества по возрастанию; применяется, когда палец отпущен.
-                val stops = listOf<Int?>(null) + state.qualities.sortedBy { it }
-                var pos by remember(state.selectedHeight, stops) { mutableFloatStateOf(stops.indexOf(state.selectedHeight).coerceAtLeast(0).toFloat()) }
-                val current = stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]
-                SliderHeader(tr("Качество", "Quality"), current?.let { qualityLabel(it) } ?: tr("Авто", "Auto"))
-                TubeSlider(
-                    value = pos,
-                    onChange = { pos = it },
-                    range = 0f..stops.lastIndex.toFloat(),
-                    steps = (stops.size - 2).coerceAtLeast(0),
-                    onDone = { onQuality(stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]) },
-                )
-                SliderEnds(tr("Авто", "Auto"), qualityLabel(stops.last() ?: 0))
+    val compact = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 520
+    Column(
+        Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = if (compact) 8.dp else 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (!compact) SheetTitle(tr("Качество", "Quality"), if (state.currentHeight > 0) tr("Сейчас ", "Now ") + qualityLabel(state.currentHeight, state.currentFps) else null)
+        if (compact) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QualityBlock(state, onQuality, Modifier.weight(1f))
+                SpeedBlock(state, onSpeed, Modifier.weight(1f))
             }
-        }
-        SettingsCard(tr("Скорость", "Speed")) {
-            // 0,25×…3× с шагом 0,05; скорость меняется сразу, пока тянете.
-            var speed by remember(state.speed) { mutableFloatStateOf(state.speed) }
-            SliderHeader(tr("Скорость", "Speed"), if (speed == 1f) tr("Обычная", "Normal") else "%.2f×".format(java.util.Locale.ROOT, speed).replace(".00×", "×").replace("0×", "×"))
-            TubeSlider(
-                value = speed,
-                onChange = {
-                    speed = (Math.round(it * 20f) / 20f)
-                    onSpeed(speed)
-                },
-                range = 0.25f..3f,
-                steps = 0,
-                onDone = {},
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("0.25×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
-                Spacer(Modifier.weight(1f))
-                if (speed != 1f) {
-                    Text(
-                        tr("Сбросить", "Reset"),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = colors.accent,
-                        modifier = Modifier.bouncyClickable {
-                            speed = 1f
-                            onSpeed(1f)
-                        }.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                    Spacer(Modifier.weight(1f))
-                }
-                Text("3×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
-            }
+        } else {
+            QualityBlock(state, onQuality, Modifier.fillMaxWidth())
+            SpeedBlock(state, onSpeed, Modifier.fillMaxWidth())
         }
     }
+}
+
+/** Ползунок качества: слева «Авто», дальше качества по возрастанию; применяется, когда палец отпущен. */
+@Composable
+private fun QualityBlock(state: PlaybackState, onQuality: (Int?) -> Unit, modifier: Modifier) {
+    val colors = TubeTheme.colors
+    SliderCard(modifier) {
+        if (state.qualities.isEmpty()) {
+            SliderHeader(tr("Качество", "Quality"), if (state.currentHeight > 0) qualityLabel(state.currentHeight, state.currentFps) else "")
+            Text(tr("Это видео в одном качестве", "This video has a single quality"), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp))
+            return@SliderCard
+        }
+        val stops = listOf<Int?>(null) + state.qualities.sortedBy { it }
+        var pos by remember(state.selectedHeight, stops) { mutableFloatStateOf(stops.indexOf(state.selectedHeight).coerceAtLeast(0).toFloat()) }
+        val current = stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]
+        val auto = tr("Авто", "Auto") + if (state.currentHeight > 0) " · " + qualityLabel(state.currentHeight, state.currentFps) else ""
+        SliderHeader(tr("Качество", "Quality"), current?.let { qualityLabel(it) } ?: auto)
+        TubeSlider(
+            value = pos,
+            onChange = { pos = it },
+            range = 0f..stops.lastIndex.toFloat(),
+            steps = (stops.size - 2).coerceAtLeast(0),
+            onDone = { onQuality(stops[pos.roundToInt().coerceIn(0, stops.lastIndex)]) },
+        )
+        SliderEnds(tr("Авто", "Auto"), qualityLabel(stops.last() ?: 0))
+    }
+}
+
+/** Ползунок скорости 0,25×…3× с шагом 0,05; скорость меняется сразу, пока тянете. */
+@Composable
+private fun SpeedBlock(state: PlaybackState, onSpeed: (Float) -> Unit, modifier: Modifier) {
+    val colors = TubeTheme.colors
+    SliderCard(modifier) {
+        var speed by remember(state.speed) { mutableFloatStateOf(state.speed) }
+        SliderHeader(tr("Скорость", "Speed"), if (speed == 1f) tr("Обычная", "Normal") else "%.2f×".format(java.util.Locale.ROOT, speed).replace(".00×", "×").replace("0×", "×"))
+        TubeSlider(
+            value = speed,
+            onChange = {
+                speed = (Math.round(it * 20f) / 20f)
+                onSpeed(speed)
+            },
+            range = 0.25f..3f,
+            steps = 0,
+            onDone = {},
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("0.25×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+            Spacer(Modifier.weight(1f))
+            androidx.compose.animation.AnimatedVisibility(speed != 1f, enter = androidx.compose.animation.fadeIn(Anim.fade()), exit = androidx.compose.animation.fadeOut(Anim.out())) {
+                Text(
+                    tr("Сбросить", "Reset"),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.accent,
+                    modifier = Modifier.bouncyClickable {
+                        speed = 1f
+                        onSpeed(1f)
+                    }.padding(horizontal = 8.dp),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            Text("3×", style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+        }
+    }
+}
+
+/** Карточка ползунка — без отдельного заголовка: название и значение уже в первой строке. */
+@Composable
+private fun SliderCard(modifier: Modifier, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Column(
+        modifier
+            .background(TubeTheme.colors.card, androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        content = content,
+    )
 }
 
 @Composable
@@ -440,7 +483,8 @@ fun AccountSheet(
     onSignOut: () -> Unit,
 ) {
     val colors = TubeTheme.colors
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.Start) {
+    // Название, профиль и кнопки — по центру.
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         SheetTitle(tr("Аккаунт", "Account"))
         if (account == null) {
             Text(
@@ -448,17 +492,17 @@ fun AccountSheet(
                     "Вход не обязателен — без него всё работает. С аккаунтом появятся ваши рекомендации, лента подписок и перенос подписок в плеер.",
                     "Signing in is optional — everything works without it. With an account you get your recommendations, subscriptions feed and subscription import.",
                 ),
-                style = MaterialTheme.typography.bodyLarge, color = colors.textSecondary,
+                style = MaterialTheme.typography.bodyLarge, color = colors.textSecondary, textAlign = TextAlign.Center,
             )
             Text(
                 tr("Вход идёт через страницу Google; пароль приложение не видит. Cookie хранятся зашифрованными на телефоне.", "You sign in on Google's page; the app never sees your password. Cookies stay encrypted on the phone."),
-                style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary,
+                style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, textAlign = TextAlign.Center,
             )
             PillButton(tr("Войти в Google", "Sign in with Google"), onClick = onSignIn, icon = TubeIcons.Account, filled = true)
         } else {
             Avatar(account.avatar, 72.dp)
-            Text(account.name ?: tr("Аккаунт Google", "Google account"), style = MaterialTheme.typography.titleLarge, color = colors.textPrimary)
-            account.handle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary) }
+            Text(account.name ?: tr("Аккаунт Google", "Google account"), style = MaterialTheme.typography.titleLarge, color = colors.textPrimary, textAlign = TextAlign.Center)
+            account.handle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, textAlign = TextAlign.Center) }
             PillButton(
                 if (importing) tr("Переношу…", "Importing…") else tr("Перенести подписки", "Import subscriptions"),
                 onClick = onImport, icon = TubeIcons.Subscriptions, enabled = !importing,
@@ -470,12 +514,58 @@ fun AccountSheet(
 }
 
 
-/** Заголовок листа слева, как экраны настроек YouTube. */
+/** Заголовок листа по центру, подзаголовок — под ним. */
 @Composable
-private fun SheetTitle(title: String, subtitle: String? = null) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineSmall, color = TubeTheme.colors.textPrimary)
-        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary)
+fun SheetTitle(title: String, subtitle: String? = null) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(title, style = MaterialTheme.typography.headlineSmall, color = TubeTheme.colors.textPrimary, textAlign = TextAlign.Center)
+        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary, textAlign = TextAlign.Center)
+    }
+}
+
+/**
+ * Раздел настроек в «шторке»: изначально свёрнут — видно только название по центру и стрелку;
+ * по нажатию содержимое плавно раскрывается, стрелка поворачивается.
+ */
+@Composable
+private fun SettingsShutter(title: String, content: @Composable () -> Unit) {
+    var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val colors = TubeTheme.colors
+    val rotation by androidx.compose.animation.core.animateFloatAsState(if (expanded) 180f else 0f, Anim.move(), label = "shutter")
+    val titleColor by androidx.compose.animation.animateColorAsState(if (expanded) colors.accent else colors.textPrimary, Anim.fade(), label = "shutterTitle")
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.card, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)),
+    ) {
+        androidx.compose.foundation.layout.Box(
+            Modifier
+                .fillMaxWidth()
+                .bouncyClickable(pressedScale = 0.99f) { expanded = !expanded }
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = titleColor,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp),
+            )
+            androidx.compose.material3.Icon(
+                TubeIcons.ChevronDown, null, tint = colors.textSecondary,
+                modifier = Modifier.align(Alignment.CenterEnd).size(20.dp).graphicsLayer { rotationZ = rotation },
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            expanded,
+            enter = androidx.compose.animation.expandVertically(Anim.move()) + androidx.compose.animation.fadeIn(Anim.fade()),
+            exit = androidx.compose.animation.shrinkVertically(Anim.move()) + androidx.compose.animation.fadeOut(Anim.out()),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) { content() }
+        }
     }
 }
 

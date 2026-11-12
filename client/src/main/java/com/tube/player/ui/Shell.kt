@@ -103,6 +103,10 @@ class ShellActions(
 private val TopBarHeight = 56.dp
 private val BottomBarHeight = 56.dp
 private val MiniHeight = 62.dp
+/** Боковая панель вкладок — планшет и широкий экран боком (как в YouTube для планшетов). */
+private val RailWidth = 80.dp
+/** С какой ширины в горизонтальном виде вкладки уходят из-под низа в боковую панель. */
+val WideMin = 840.dp
 
 @Composable
 fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscreen: Boolean, initialSheet: Sheet = Sheet.None) {
@@ -137,16 +141,18 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
     }
 
     CompositionLocalProvider(LocalHazeState provides hazeState) {
-        Box(Modifier.fillMaxSize()) {
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().background(TubeTheme.colors.background))
 
+            // Планшет (или широкий экран) боком: вкладки — слева, внизу остаётся только мини-плеер.
+            val rail = maxWidth >= WideMin && maxWidth > maxHeight && !login
             val insets = WindowInsets.safeDrawing.asPaddingValues()
             val dir = LocalLayoutDirection.current
             val padding = PaddingValues(
-                start = insets.calculateStartPadding(dir),
+                start = insets.calculateStartPadding(dir) + if (rail) RailWidth else 0.dp,
                 end = insets.calculateEndPadding(dir),
                 top = insets.calculateTopPadding() + if (login) 0.dp else TopBarHeight,
-                bottom = insets.calculateBottomPadding() + BottomBarHeight + (if (hasMini) MiniHeight else 0.dp) + 8.dp,
+                bottom = insets.calculateBottomPadding() + (if (rail) 0.dp else BottomBarHeight) + (if (hasMini) MiniHeight else 0.dp) + 8.dp,
             )
             val key: Any = route ?: vm.tab
             Box(Modifier.fillMaxSize()) {
@@ -225,7 +231,10 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     canGoBack = route != null,
                     account = account,
                 )
-                BottomArea(vm, state, hasMini, onClose = { playback.close() })
+                BottomArea(vm, state, hasMini, rail, onClose = { playback.close() })
+                AnimatedVisibility(rail, enter = fadeIn(Anim.fade()), exit = fadeOut(Anim.out())) {
+                    NavRail(vm, Modifier.padding(top = insets.calculateTopPadding() + TopBarHeight))
+                }
             }
 
             // Страница видео поверх всего — «выезжает» снизу, как в YouTube.
@@ -258,6 +267,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     hideShorts = hideShorts,
                     comments = state.item?.url?.takeIf { it.isNotEmpty() }?.let { vm.comments(it) },
                     liked = state.item?.let { item -> liked.any { it.id == item.id } } == true,
+                    visible = vm.playerExpanded,
                     disliked = state.item?.id?.let { it in disliked } == true,
                 )
             }
@@ -491,22 +501,91 @@ fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, description: 
     }
 }
 
-/** Низ: мини-плеер во всю ширину над панелью вкладок (как в YouTube). */
+/** Вкладки столбиком слева — для планшета боком. */
 @Composable
-private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.PlaybackState, hasMini: Boolean, onClose: () -> Unit) {
+private fun NavRail(vm: MainViewModel, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxHeight()
+            .background(TubeTheme.colors.background.copy(alpha = 0.97f))
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+            .width(RailWidth)
+            .padding(top = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Tab.entries.forEach { tab -> TabButton(vm, tab, Modifier.fillMaxWidth().height(72.dp)) }
+    }
+}
+
+/** Вкладка: значок в подсвеченной капсуле и подпись; выбранная — цвета акцента и чуть крупнее. */
+@Composable
+private fun TabButton(vm: MainViewModel, tab: Tab, modifier: Modifier) {
+    val colors = TubeTheme.colors
+    val selected = vm.tab == tab
+    val tint by animateColorAsState(if (selected) colors.textPrimary else colors.textSecondary, Anim.fade(), label = "tab")
+    val scale by animateFloatAsState(if (selected) 1f else 0.94f, Anim.move(), label = "tabScale")
+    Column(
+        modifier
+            .bouncyClickable(pressedScale = 0.9f) { vm.selectTab(tab) }
+            .graphicsLayer { scaleX = scale; scaleY = scale },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        val pill by animateColorAsState(if (selected) colors.accent.copy(alpha = 0.16f) else Color.Transparent, Anim.fade(), label = "tabPill")
+        Box(
+            Modifier
+                .size(width = 56.dp, height = 28.dp)
+                .background(pill, Shapes.Pill),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                when (tab) {
+                    Tab.Home -> TubeIcons.Home
+                    Tab.Subscriptions -> TubeIcons.Subscriptions
+                    Tab.Library -> TubeIcons.Account
+                },
+                null,
+                tint = if (selected) colors.accent else tint,
+                modifier = Modifier.size(24.dp),
+            )
+        }
+        Text(
+            when (tab) {
+                Tab.Home -> tr("Главная", "Home")
+                Tab.Subscriptions -> tr("Подписки", "Subscriptions")
+                Tab.Library -> tr("Вы", "You")
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Низ: мини-плеер во всю ширину над панелью вкладок (как в YouTube); на планшете боком — только мини-плеер. */
+@Composable
+private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.PlaybackState, hasMini: Boolean, rail: Boolean, onClose: () -> Unit) {
     val colors = TubeTheme.colors
     val playback = vm.container.playback
     val progress = rememberProgress(if (hasMini) playback.player else null)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        Column(Modifier.fillMaxWidth().background(colors.background.copy(alpha = 0.97f))) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = if (rail) RailWidth else 0.dp)
+                .background(colors.background.copy(alpha = 0.97f))
+                .then(if (rail) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)) else Modifier),
+        ) {
             AnimatedVisibility(
                 hasMini,
-                enter = slideInVertically(Anim.move()) { it } + fadeIn(Anim.fade()),
+                // Мини-плеер проявляется навстречу уходящей странице видео — короткий сдвиг, без пустой паузы.
+                enter = slideInVertically(Anim.move()) { it / 2 } + fadeIn(Anim.fade()),
                 exit = slideOutVertically(Anim.move()) { it } + fadeOut(Anim.out()),
             ) {
                 Column {
                     MiniPlayer(
-                        state, progress.playing, playback.player,
+                        state, progress.playing, playback.player, progress.aspect,
                         onExpand = { vm.playerExpanded = true },
                         onPlayPause = { if (playback.player.isPlaying) playback.player.pause() else playback.player.play() },
                         onClose = onClose,
@@ -519,56 +598,16 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
                     }
                 }
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.chip))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
-                    .height(BottomBarHeight),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Tab.entries.forEach { tab ->
-                    val selected = vm.tab == tab
-                    val tint by animateColorAsState(if (selected) colors.textPrimary else colors.textSecondary, Anim.fade(), label = "tab")
-                    val scale by animateFloatAsState(if (selected) 1f else 0.94f, Anim.move(), label = "tabScale")
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .bouncyClickable(pressedScale = 0.9f) { vm.selectTab(tab) }
-                            .graphicsLayer { scaleX = scale; scaleY = scale },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        val pill by animateColorAsState(if (selected) colors.accent.copy(alpha = 0.16f) else Color.Transparent, Anim.fade(), label = "tabPill")
-                        Box(
-                            Modifier
-                                .size(width = 56.dp, height = 28.dp)
-                                .background(pill, Shapes.Pill),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                when (tab) {
-                                    Tab.Home -> TubeIcons.Home
-                                    Tab.Subscriptions -> TubeIcons.Subscriptions
-                                    Tab.Library -> TubeIcons.Account
-                                },
-                                null,
-                                tint = if (selected) colors.accent else tint,
-                                modifier = Modifier.size(24.dp),
-                            )
-                        }
-                        Text(
-                            when (tab) {
-                                Tab.Home -> tr("Главная", "Home")
-                                Tab.Subscriptions -> tr("Подписки", "Subscriptions")
-                                Tab.Library -> tr("Вы", "You")
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = tint,
-                            maxLines = 1,
-                        )
-                    }
+            if (!rail) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(colors.chip))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                        .height(BottomBarHeight),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Tab.entries.forEach { tab -> TabButton(vm, tab, Modifier.weight(1f).fillMaxHeight()) }
                 }
             }
         }

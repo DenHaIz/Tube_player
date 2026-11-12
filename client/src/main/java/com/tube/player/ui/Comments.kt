@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -199,7 +200,7 @@ fun CommentsPanel(model: CommentsModel, onClose: () -> Unit, modifier: Modifier 
             Spacer(Modifier.weight(1f))
             BarIcon(TubeIcons.Close, tr("Закрыть", "Close"), onClose)
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.chip))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(commentDivider()))
         LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
             when {
                 model.disabled -> item { Message(tr("Комментарии отключены", "Comments are turned off"), null, null, null) }
@@ -234,6 +235,16 @@ fun CommentsPanel(model: CommentsModel, onClose: () -> Unit, modifier: Modifier 
  * Комментарий как в YouTube: аватар слева, имя автора (выделено) и время, текст (нажатие раскрывает), лайки и ответы.
  * Между комментариями — тонкий разделитель, ответы сдвинуты и отмечены линией слева, — чтобы авторы не сливались.
  */
+/**
+ * Цвет разделителя между комментариями. На чёрном фоне AMOLED обычный полупрозрачный серый почти не виден —
+ * там линия заметно светлее, чтобы авторы не сливались.
+ */
+@Composable
+private fun commentDivider(): Color {
+    val colors = TubeTheme.colors
+    return if (colors.background == Color.Black) Color.White.copy(alpha = 0.2f) else colors.chip
+}
+
 @Composable
 private fun CommentRow(comment: Comment, reply: Boolean, onReplies: () -> Unit, repliesShown: Boolean, repliesLoading: Boolean, divider: Boolean = false) {
     val colors = TubeTheme.colors
@@ -244,7 +255,7 @@ private fun CommentRow(comment: Comment, reply: Boolean, onReplies: () -> Unit, 
         if (comment.html) AnnotatedString.fromHtml(comment.text, linkStyles = TextLinkStyles(SpanStyle(color = accent))) else AnnotatedString(comment.text)
     }
     Column(Modifier.fillMaxWidth()) {
-        if (!reply && divider) Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(colors.chip))
+        if (!reply && divider) Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(commentDivider()))
         Row(
             Modifier
                 .fillMaxWidth()

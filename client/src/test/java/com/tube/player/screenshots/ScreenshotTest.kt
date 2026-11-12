@@ -10,6 +10,8 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.background
@@ -226,6 +228,16 @@ class ScreenshotTest {
     }
 
     @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun homeTabletMini() {
+        render { vm ->
+            compose.runOnUiThread { app.container.playback.preview(PlaybackState(item = videos()[1])) }
+            vm.playerExpanded = false
+        }
+        shot("home_tablet_mini")
+    }
+
+    @Test
     fun miniPlayer() {
         render { vm ->
             compose.runOnUiThread { app.container.playback.preview(PlaybackState(item = videos()[1])) }
@@ -274,7 +286,12 @@ class ScreenshotTest {
     }
 
     @Test
-    fun commentsPanel() {
+    fun commentsPanel() = comments(amoled = false, name = "comments_panel")
+
+    @Test
+    fun commentsPanelAmoled() = comments(amoled = true, name = "comments_amoled")
+
+    private fun comments(amoled: Boolean, name: String) {
         val comments = listOf(
             com.tube.player.youtube.Comment("1", "@nauka_prosto", avatar = "https://yt3/a1", text = "Спасибо всем, кто смотрит! Следующий выпуск — про спутниковый интернет.", likes = 1240, date = "2 дня назад", pinned = true, byOwner = true, hearted = true),
             com.tube.player.youtube.Comment("2", "@ivan", avatar = "https://yt3/a2", text = "Наконец-то понятно объяснили, как работает DNS. Лайк!", likes = 312, date = "1 день назад", replies = 4),
@@ -285,7 +302,7 @@ class ScreenshotTest {
         val model = CommentsModelHolder.preview(app, comments)
         compose.setContent {
             CompositionLocalProvider(LocalLanguage provides AppLanguage.Russian) {
-                TubeTheme(darkTheme = false, palette = TubePalette.Violet) {
+                TubeTheme(darkTheme = amoled, amoled = amoled, palette = TubePalette.Violet) {
                     com.tube.player.ui.VideoScreen(
                         player = null,
                         state = PlaybackState(item = v, details = VideoDetails(v, "Описание", false, 48_200, 1_840_000, emptyList(), emptyList())),
@@ -302,7 +319,7 @@ class ScreenshotTest {
         }
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(1000)
-        shot("comments_panel")
+        shot(name)
     }
 
     @Test
@@ -365,9 +382,12 @@ class ScreenshotTest {
     }
 
     @Test
-    fun settingsSheetScrolled() {
+    fun settingsSheetExpanded() {
         render(dark = true, amoled = true, sheet = Sheet.Settings)
-        compose.onRoot().performTouchInputSwipeUp()
+        compose.onNodeWithText("Аккаунт").performClick()
+        compose.onNodeWithText("Вид").performClick()
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1000)
         shot("sheet_settings_amoled")
     }
 
@@ -392,6 +412,13 @@ class ScreenshotTest {
     fun qualitySheet() {
         render(sheet = Sheet.Quality) { vm -> openVideo(vm) }
         shot("sheet_quality")
+    }
+
+    @Test
+    @Config(qualifiers = "w860dp-h400dp-xxhdpi")
+    fun qualitySheetLandscape() {
+        render(dark = true, sheet = Sheet.Quality) { vm -> openVideo(vm) }
+        shot("sheet_quality_landscape")
     }
 
     @Test

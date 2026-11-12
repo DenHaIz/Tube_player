@@ -104,12 +104,7 @@ fun UpdateSheet(state: UpdateState, onCheck: () -> Unit, onDownload: (Release) -
         Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(
-            if (release != null) "Tube Player ${release.version}" else tr("Обновления", "Updates"),
-            style = MaterialTheme.typography.headlineSmall,
-            color = colors.textPrimary,
-            modifier = Modifier.padding(horizontal = 4.dp),
-        )
+        SheetTitle(if (release != null) "Tube Player ${release.version}" else tr("Обновления", "Updates"))
         val status = when (state) {
             UpdateState.Idle -> null
             UpdateState.Checking -> tr("Проверяю…", "Checking…")
@@ -119,7 +114,7 @@ fun UpdateSheet(state: UpdateState, onCheck: () -> Unit, onDownload: (Release) -
             is UpdateState.Ready -> tr("Скачано и проверено — можно ставить", "Downloaded and verified — ready to install")
             is UpdateState.Failed -> tr("Не удалось: ", "Failed: ") + state.message
         }
-        status?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, modifier = Modifier.padding(horizontal = 4.dp)) }
+        status?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) }
         if (state is UpdateState.Downloading) {
             LinearProgressIndicator(
                 progress = { state.progress },

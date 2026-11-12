@@ -104,6 +104,8 @@ fun VideoScreen(
     modifier: Modifier = Modifier,
     comments: CommentsModel? = null,
     startWithComments: Boolean = false,
+    /** false — страница уходит (свёрнута); при повторном открытии смещение от свайпа сбрасывается. */
+    visible: Boolean = true,
 ) {
     // Панель комментариев выезжает под плеером; «назад» сначала закрывает её.
     var commentsOpen by remember { mutableStateOf(startWithComments) }
@@ -119,6 +121,12 @@ fun VideoScreen(
     var settling by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val density = androidx.compose.ui.platform.LocalDensity.current
+    // Развернули снова, пока страница ещё уходила, — вернуть её на место.
+    androidx.compose.runtime.LaunchedEffect(visible) {
+        if (visible && offset != 0f) {
+            androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
+        }
+    }
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -135,7 +143,8 @@ fun VideoScreen(
             .background(TubeTheme.colors.background),
     ) {
         val landscape = maxWidth > maxHeight
-        val wide = maxWidth >= 900.dp && landscape
+        // Планшет боком: плеер и похожие рядом. Телефон боком (низкий экран) — плеер на весь экран.
+        val wide = maxWidth >= WideMin && maxHeight >= 480.dp && landscape
         val height = constraints.maxHeight.toFloat()
         val threshold = with(density) { 96.dp.toPx() }
         val fling = with(density) { 900.dp.toPx() }
@@ -148,13 +157,22 @@ fun VideoScreen(
                     when {
                         fullscreen && down -> actions.onFullscreen(false)
                         !fullscreen && down -> {
-                            // Продолжает движение пальца (с его скоростью) до низа экрана и становится мини-плеером.
-                            // Смещение не сбрасывается: страница уже за экраном и просто исчезает — без отката и задержки.
+                            // Продолжает движение пальца (с его скоростью) вниз и становится мини-плеером.
+                            // Мини-плеер появляется, пока страница ещё доезжает (на ~60% пути), а не после того, как
+                            // пружина успокоится у самого края, — иначе между ними была пустая секунда.
+                            // Смещение не сбрасывается: страница уходит за экран и просто исчезает — без отката.
+                            var minimized = false
                             androidx.compose.animation.core.animate(
                                 offset, height, initialVelocity = velocity.coerceAtLeast(0f),
-                                animationSpec = androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 500f, visibilityThreshold = 1f),
-                            ) { v, _ -> offset = v }
-                            actions.onMinimize()
+                                animationSpec = androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 900f, visibilityThreshold = 8f),
+                            ) { v, _ ->
+                                offset = v
+                                if (!minimized && v > height * 0.6f) {
+                                    minimized = true
+                                    actions.onMinimize()
+                                }
+                            }
+                            if (!minimized) actions.onMinimize()
                         }
                         !fullscreen && up -> actions.onFullscreen(true)
                         else -> androidx.compose.animation.core.animate(
@@ -180,16 +198,18 @@ fun VideoScreen(
         when {
             fullscreen || (landscape && !wide) -> playerBox(Modifier.fillMaxSize())
             wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                LazyColumn(Modifier.weight(0.62f).fillMaxHeight(), contentPadding = PaddingValues(bottom = 24.dp)) {
-                    item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) }
+                // Планшет боком: плеер с описанием слева (плеер скруглён и с полями, как в YouTube для планшетов),
+                // справа — похожие видео компактными строками: превью слева, название справа.
+                LazyColumn(Modifier.weight(0.64f).fillMaxHeight(), contentPadding = PaddingValues(start = 16.dp, top = 12.dp, bottom = 24.dp)) {
+                    item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))) }
                     info(state, subscribed, withComments, liked, disliked, comments)
                 }
-                Box(Modifier.weight(0.38f).fillMaxHeight()) {
+                Box(Modifier.weight(0.36f).fillMaxHeight()) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     ) {
-                        related(state, hideShorts, actions)
+                        related(state, hideShorts, actions, compact = true)
                     }
                     CommentsLayer(commentsOpen, comments) { commentsOpen = false }
                 }
@@ -420,9 +440,18 @@ private fun Description(details: com.tube.player.youtube.VideoDetails, onSeek: (
     }
 }
 
-private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, actions: VideoActions, padded: Boolean = false) {
+private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, actions: VideoActions, padded: Boolean = false, compact: Boolean = false) {
     val related = state.details?.related.orEmpty().filter { !hideShorts || it !is VideoItem || !it.short }
     if (related.isEmpty()) return
+    if (compact) {
+        items(related.size, key = { "r" + related[it].url }) { i ->
+            val item = related[i]
+            Box(Modifier.animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out()).padding(bottom = 12.dp)) {
+                if (item is VideoItem) CompactVideoRow(item) { actions.onOpen(item) } else FeedItemCard(item, actions.onOpen)
+            }
+        }
+        return
+    }
     items(related.size, key = { "r" + related[it].url }) { i ->
         androidx.compose.runtime.CompositionLocalProvider(
             LocalThumbShape provides if (padded) androidx.compose.ui.graphics.RectangleShape else ThumbShape,
@@ -433,12 +462,30 @@ private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, act
     }
 }
 
+/** Похожее видео строкой: превью 16:9 слева, название в две строки и канал с просмотрами справа. */
+@Composable
+private fun CompactVideoRow(video: VideoItem, onClick: () -> Unit) {
+    val lang = LocalLanguage.current
+    Row(Modifier.fillMaxWidth().bouncyClickable(pressedScale = 0.98f, onClick = onClick)) {
+        Thumbnail(video, Modifier.width(168.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(video.title, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium), color = TubeTheme.colors.textPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val meta = Format.meta(video.channel, Format.views(video.views, lang).takeIf { !video.live || video.views > 0 }, Format.uploaded(video, lang))
+            if (meta.isNotEmpty()) {
+                Text(meta, style = MaterialTheme.typography.bodyMedium, color = TubeTheme.colors.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+    }
+}
+
 /** Мини-плеер над вкладками, как в YouTube: превью слева, название и канал, «пауза» и «закрыть»; тап — развернуть. */
 @Composable
 fun MiniPlayer(
     state: PlaybackState,
     playing: Boolean,
     player: Player? = null,
+    aspect: Float = 16f / 9f,
     onExpand: () -> Unit,
     onPlayPause: () -> Unit,
     onClose: () -> Unit,
@@ -454,12 +501,7 @@ fun MiniPlayer(
     ) {
         Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f).background(Color.Black)) {
             if (player != null && !state.popup) {
-                androidx.media3.ui.compose.ContentFrame(
-                    player = player,
-                    modifier = Modifier.fillMaxSize(),
-                    surfaceType = androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                )
+                VideoSurface(player, aspect, Modifier.fillMaxSize(), placeholder = com.tube.player.youtube.thumbnailCandidates(item))
             } else {
                 NetImage(com.tube.player.youtube.thumbnailCandidates(item), Modifier.fillMaxSize())
             }

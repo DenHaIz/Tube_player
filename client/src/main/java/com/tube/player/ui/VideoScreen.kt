@@ -7,6 +7,9 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.animateBounds
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.composed
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import com.tube.ui.theme.Shapes
@@ -131,6 +134,8 @@ fun VideoScreen(
             androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
         }
     }
+    // Во весь экран фон плавно темнеет — плеер растёт на чёрном, без светлых краёв по пути.
+    val pageBackground by androidx.compose.animation.animateColorAsState(if (fullscreen) Color.Black else TubeTheme.colors.background, Anim.fade(), label = "pageBg")
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -144,7 +149,7 @@ fun VideoScreen(
                 alpha = 1f - 0.6f * f
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
             }
-            .background(TubeTheme.colors.background),
+            .background(pageBackground),
     ) {
         val landscape = maxWidth > maxHeight
         // Планшет боком: плеер и похожие рядом. Телефон боком (низкий экран) — плеер на весь экран.
@@ -189,59 +194,123 @@ fun VideoScreen(
                 }
             }
         }
-        val playerBox: @Composable (Modifier) -> Unit = { m ->
-            PlayerView(
-                player, state, settings, fullscreen = fullscreen,
-                onFullscreen = actions.onFullscreen, onMinimize = actions.onMinimize, onQuality = actions.onQuality,
-                onPopup = actions.onPopup, onPip = actions.onPip, onSkip = actions.onSkip, onUndoSkip = actions.onUndoSkip,
-                onRetry = actions.onRetry,
-                modifier = m.onGloballyPositioned { c ->
-                    val r = c.boundsInWindow()
-                    if (r.width > 0 && r.height > 0) actions.onPlayerBounds(android.graphics.Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()))
-                },
-                // Во весь экран страница не сдвигается — свайп вниз просто выходит из него.
-                onSwipe = { dy -> if (!fullscreen && !settling) offset = dy.coerceAtLeast(0f) },
-                onSwipeEnd = swipeEnd,
-            )
-        }
-        when {
-            fullscreen || (landscape && !wide) -> playerBox(Modifier.fillMaxSize())
-            wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                // Планшет боком: плеер с описанием слева (плеер скруглён и с полями, как в YouTube для планшетов),
-                // справа — похожие видео компактными строками: превью слева, название справа.
-                // Поля симметричные: плеер, текст и кнопки — в 16dp от краёв колонки, между колонками — тоже 16dp.
-                LazyColumn(Modifier.weight(0.64f).fillMaxHeight(), contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 24.dp)) {
-                    item { Box(Modifier.padding(horizontal = 12.dp)) { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))) } }
-                    info(state, subscribed, withComments, liked, disliked, comments)
-                }
-                Box(Modifier.weight(0.36f).fillMaxHeight()) {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
-                    ) {
-                        related(state, hideShorts, actions, compact = true)
+        // Плеер один на все раскладки (movableContent): при входе/выходе из полноэкранного режима и повороте он
+        // переносится, а не создаётся заново — видео не пропадает и не мелькает обложка. На планшете боком
+        // (размер окна не меняется) его границы плавно анимируются из ячейки во весь экран и обратно.
+        val sizeKey = constraints.maxWidth to constraints.maxHeight
+        var lastSize by remember { mutableStateOf(sizeKey) }
+        val sizeStable = lastSize == sizeKey
+        androidx.compose.runtime.SideEffect { lastSize = sizeKey }
+        val slot = PlayerSlot(
+            player, state, settings, fullscreen, actions,
+            onSwipe = { dy -> if (!fullscreen && !settling) offset = dy.coerceAtLeast(0f) },
+            onSwipeEnd = swipeEnd,
+            animate = sizeStable && landscape,
+            corner = if (wide && !fullscreen) 12.dp else 0.dp,
+        )
+        androidx.compose.ui.layout.LookaheadScope {
+            val lookahead = this
+            val playerBox: @Composable (Modifier) -> Unit = { m -> movablePlayer(m, slot, lookahead) }
+            when {
+                fullscreen || (landscape && !wide) -> playerBox(Modifier.fillMaxSize())
+                wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    // Планшет боком: плеер сверху слева (закреплён, под ним прокручивается описание),
+                    // справа — похожие видео компактными строками: превью слева, название справа.
+                    // Поля симметричные: плеер, текст и кнопки — в 16dp от краёв колонки, между колонками — тоже 16dp.
+                    Column(Modifier.weight(0.64f).fillMaxHeight().zIndex(1f)) {
+                        Box(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp).zIndex(1f)) {
+                            playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                        }
+                        LazyColumn(
+                            Modifier.weight(1f).fillMaxWidth().fadeInOnAppear(),
+                            contentPadding = PaddingValues(start = 4.dp, end = 4.dp, bottom = 24.dp),
+                        ) {
+                            info(state, subscribed, withComments, liked, disliked, comments)
+                        }
                     }
-                    CommentsLayer(commentsOpen, comments) { commentsOpen = false }
-                }
-            }
-            else -> Column(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxWidth().background(Color.Black).padding(WindowInsets.statusBars.asPaddingValues())) {
-                    playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-                }
-                Box(Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
-                    ) {
-                        info(state, subscribed, withComments, liked, disliked, comments)
-                        // Планшет стоя: похожие — в две колонки карточками, а не огромными превью во всю ширину.
-                        if (twoColumns) related(state, hideShorts, actions, columns = 2) else related(state, hideShorts, actions, padded = true)
+                    Box(Modifier.weight(0.36f).fillMaxHeight().fadeInOnAppear()) {
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                        ) {
+                            related(state, hideShorts, actions, compact = true)
+                        }
+                        CommentsLayer(commentsOpen, comments) { commentsOpen = false }
                     }
-                    CommentsLayer(commentsOpen, comments) { commentsOpen = false }
+                }
+                else -> Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxWidth().background(Color.Black).padding(WindowInsets.statusBars.asPaddingValues()).zIndex(1f)) {
+                        playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                    }
+                    Box(Modifier.fillMaxSize().fadeInOnAppear()) {
+                        LazyColumn(
+                            Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
+                        ) {
+                            info(state, subscribed, withComments, liked, disliked, comments)
+                            // Планшет стоя: похожие — в две колонки карточками, а не огромными превью во всю ширину.
+                            if (twoColumns) related(state, hideShorts, actions, columns = 2) else related(state, hideShorts, actions, padded = true)
+                        }
+                        CommentsLayer(commentsOpen, comments) { commentsOpen = false }
+                    }
                 }
             }
         }
     }
+}
+
+/** Всё, что нужно плееру страницы; передаётся в перемещаемый плеер каждый раз заново, без устаревших значений. */
+private class PlayerSlot(
+    val player: Player?,
+    val state: PlaybackState,
+    val settings: PlayerSettings,
+    val fullscreen: Boolean,
+    val actions: VideoActions,
+    val onSwipe: (Float) -> Unit,
+    val onSwipeEnd: (Float, Float) -> Unit,
+    /** Анимировать смену границ (планшет боком); при повороте и смене размера окна — сразу на место. */
+    val animate: Boolean,
+    /** Скругление углов: в ячейке планшета — 12dp, во весь экран — 0. */
+    val corner: androidx.compose.ui.unit.Dp,
+)
+
+/** Плавное изменение границ плеера: без перелёта, ~0,35 с. */
+private val PlayerBounds = androidx.compose.animation.BoundsTransform { _, _ ->
+    androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 420f)
+}
+
+@Composable
+private fun movablePlayer(modifier: Modifier, slot: PlayerSlot, lookahead: androidx.compose.ui.layout.LookaheadScope) {
+    // Один экземпляр на страницу: переносится между раскладками со всем состоянием (TextureView, контролы, жесты).
+    val content = remember {
+        androidx.compose.runtime.movableContentOf { m: Modifier, s: PlayerSlot, scope: androidx.compose.ui.layout.LookaheadScope ->
+            val corner by androidx.compose.animation.core.animateDpAsState(s.corner, Anim.move(), label = "playerCorner")
+            PlayerView(
+                s.player, s.state, s.settings, fullscreen = s.fullscreen,
+                onFullscreen = s.actions.onFullscreen, onMinimize = s.actions.onMinimize, onQuality = s.actions.onQuality,
+                onPopup = s.actions.onPopup, onPip = s.actions.onPip, onSkip = s.actions.onSkip, onUndoSkip = s.actions.onUndoSkip,
+                onRetry = s.actions.onRetry,
+                modifier = (if (s.animate) Modifier.animateBounds(scope, boundsTransform = PlayerBounds) else Modifier)
+                    .then(m)
+                    .clip(RoundedCornerShape(corner))
+                    .onGloballyPositioned { c ->
+                        val r = c.boundsInWindow()
+                        if (r.width > 0 && r.height > 0) s.actions.onPlayerBounds(android.graphics.Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()))
+                    },
+                // Во весь экран страница не сдвигается — свайп вниз просто выходит из него.
+                onSwipe = s.onSwipe,
+                onSwipeEnd = s.onSwipeEnd,
+            )
+        }
+    }
+    content(modifier, slot, lookahead)
+}
+
+/** Содержимое рядом с плеером мягко проявляется, когда раскладка сменилась (выход из полноэкранного режима). */
+private fun Modifier.fadeInOnAppear(): Modifier = composed {
+    val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { alpha.animateTo(1f, androidx.compose.animation.core.tween(220, delayMillis = 60)) }
+    graphicsLayer { this.alpha = alpha.value }
 }
 
 private fun LazyListScope.info(state: PlaybackState, subscribed: Boolean, actions: VideoActions, liked: Boolean, disliked: Boolean, comments: CommentsModel?) {

@@ -47,19 +47,54 @@ fun VideoSurface(
             }
         }
         AndroidView(
-            factory = { context -> TextureView(context).apply { surfaceTextureListener = holder } },
+            factory = { context -> TextureView(context).apply { holder.attach(this) } },
             update = { it.keepScreenOn = keepScreenOn },
             modifier = Modifier.aspectRatio(aspect.coerceIn(0.3f, 4f)),
         )
     }
 }
 
-/** Связка «поверхность TextureView ↔ плеер»: отдать готовую поверхность, забрать при уничтожении. */
-private class SurfaceHolder(private val player: Player, private val onFirstFrame: () -> Unit) : TextureView.SurfaceTextureListener {
+/**
+ * Связка «поверхность TextureView ↔ плеер»: отдать готовую поверхность, забрать при окончательном уходе.
+ *
+ * Поверхность (SurfaceTexture) живёт дольше самого вида: когда плеер переносится между раскладками
+ * (полноэкранный режим, поворот), вид на миг отсоединяется от окна — TextureView в этот момент уничтожил бы
+ * поверхность, и видео пропало бы до следующего кадра (мелькала обложка). Здесь она сохраняется
+ * (`onSurfaceTextureDestroyed` → false) и при возвращении вида в окно подставляется обратно — с последним кадром.
+ */
+private class SurfaceHolder(private val player: Player, private val onFirstFrame: () -> Unit) :
+    TextureView.SurfaceTextureListener, android.view.View.OnAttachStateChangeListener {
+    private var texture: SurfaceTexture? = null
     private var surface: Surface? = null
     private var notified = false
+    private var released = false
+    /** Поверхность у нас, а не у вида (вид отсоединён) — освобождать её при уходе нам. */
+    private var kept = false
+
+    fun attach(view: TextureView) {
+        view.surfaceTextureListener = this
+        view.addOnAttachStateChangeListener(this)
+    }
+
+    override fun onViewAttachedToWindow(v: android.view.View) {
+        val view = v as TextureView
+        val saved = texture
+        if (!released && saved != null && view.surfaceTexture !== saved) {
+            runCatching { view.setSurfaceTexture(saved) }.onSuccess { kept = false }
+        }
+    }
+
+    override fun onViewDetachedFromWindow(v: android.view.View) = Unit
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+        if (released) return
+        if (this.texture === texture && surface != null) {
+            player.setVideoSurface(surface)
+            return
+        }
+        surface?.release()
+        this.texture?.takeIf { it !== texture }?.release()
+        this.texture = texture
         val s = Surface(texture)
         surface = s
         player.setVideoSurface(s)
@@ -67,9 +102,11 @@ private class SurfaceHolder(private val player: Player, private val onFirstFrame
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
 
+    /** Вид отсоединён: поверхность не отдаём системе — она вернётся при переносе. Освобождает её [release]. */
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-        release()
-        return true
+        if (released) return true
+        kept = true
+        return false
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
@@ -79,12 +116,16 @@ private class SurfaceHolder(private val player: Player, private val onFirstFrame
         }
     }
 
-    /** Убрать свою поверхность у плеера; если плеер уже на другой — ничего не меняется. */
+    /** Вид ушёл совсем: убрать свою поверхность у плеера (если плеер уже на другой — ничего не меняется) и освободить. */
     fun release() {
+        released = true
         surface?.let {
             player.clearVideoSurface(it)
             it.release()
         }
         surface = null
+        // Если поверхность ещё у вида — он освободит её сам при отсоединении (onSurfaceTextureDestroyed → true).
+        if (kept) texture?.release()
+        texture = null
     }
 }

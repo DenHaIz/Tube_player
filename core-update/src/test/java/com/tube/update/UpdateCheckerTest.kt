@@ -1,6 +1,5 @@
-package com.tube.dpi
+package com.tube.update
 
-import com.tube.dpi.update.UpdateChecker
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

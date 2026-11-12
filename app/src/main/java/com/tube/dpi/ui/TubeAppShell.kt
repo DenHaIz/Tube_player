@@ -49,7 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tube.dpi.R
-import com.tube.dpi.update.UpdateState
+import com.tube.update.UpdateState
 import com.tube.dpi.vpn.FailReason
 import com.tube.dpi.vpn.TunnelStatus
 import com.tube.ui.components.AmbientBackground

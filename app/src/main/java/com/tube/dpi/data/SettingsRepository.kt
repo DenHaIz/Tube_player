@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.tube.byedpi.Strategies
 import com.tube.byedpi.Strategy
 import com.tube.strategy.StrategySettings
+import com.tube.update.UpdatePrefs
 import com.tube.ui.i18n.AppLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -28,7 +29,7 @@ data class TunnelSettings(
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-class SettingsRepository(private val context: Context) : StrategySettings {
+class SettingsRepository(private val context: Context) : StrategySettings, UpdatePrefs {
     private val themeKey = stringPreferencesKey("theme")
     private val languageKey = stringPreferencesKey("language")
     private val dynamicColorsKey = booleanPreferencesKey("dynamic_colors")
@@ -139,6 +140,10 @@ class SettingsRepository(private val context: Context) : StrategySettings {
     val lastUpdateCheck: Flow<Long> = data.map { it[lastUpdateCheckKey] ?: 0L }
 
     suspend fun setLastUpdateCheck(time: Long) = edit { it[lastUpdateCheckKey] = time }
+
+    override suspend fun autoCheck(): Boolean = checkUpdates.first()
+    override suspend fun lastCheck(): Long = lastUpdateCheck.first()
+    override suspend fun setLastCheck(time: Long) = setLastUpdateCheck(time)
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         context.dataStore.edit(block)

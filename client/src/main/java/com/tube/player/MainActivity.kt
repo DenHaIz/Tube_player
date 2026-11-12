@@ -54,6 +54,15 @@ class MainActivity : ComponentActivity() {
 
     private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private var accountCallback: ((String?) -> Unit)? = null
+
+    /** Системный список аккаунтов: приложение получает только выбранный адрес, без пароля и токенов. */
+    private val accountPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val email = result.data?.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)
+        accountCallback?.invoke(email)
+        accountCallback = null
+    }
+
     /** Кнопка «пауза/играть» в окне PiP. */
     private val pipReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -85,6 +94,22 @@ class MainActivity : ComponentActivity() {
             background = {
                 askNotifications()
                 moveTaskToBack(true)
+            },
+            chooseAccount = { callback ->
+                val intent = android.accounts.AccountManager.newChooseAccountIntent(
+                    null, null, arrayOf("com.google"), null, null, null, null,
+                )
+                accountCallback = callback
+                runCatching { accountPicker.launch(intent) }.onFailure {
+                    accountCallback = null
+                    callback(null)
+                }
+            },
+            installUpdate = { apk ->
+                val updates = container.updates
+                // Android 8+: сначала разрешить установку из этого приложения, затем — системный установщик.
+                val intent = if (updates.canInstall()) updates.installIntent(apk) else updates.installPermissionIntent()
+                runCatching { startActivity(intent) }
             },
         )
         setContent {

@@ -14,6 +14,7 @@ import com.tube.byedpi.Strategy
 import com.tube.player.sponsorblock.SegmentAction
 import com.tube.player.sponsorblock.SponsorCategory
 import com.tube.strategy.StrategySettings
+import com.tube.update.UpdatePrefs
 import com.tube.ui.i18n.AppLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -47,12 +48,14 @@ data class PlayerSettings(
     val speed: Float = 1f,
     val gestures: Boolean = true,
     val sponsorBlock: Boolean = true,
+    /** Проверять новые версии на GitHub (и через зеркала) при запуске. */
+    val autoUpdate: Boolean = true,
     val sponsor: Map<SponsorCategory, SegmentAction> = SponsorCategory.entries.associateWith { it.default },
 )
 
 private val Context.dataStore by preferencesDataStore(name = "player_settings")
 
-class SettingsRepository(private val context: Context) : StrategySettings {
+class SettingsRepository(private val context: Context) : StrategySettings, UpdatePrefs {
     private val theme = stringPreferencesKey("theme")
     private val amoled = booleanPreferencesKey("amoled")
     private val dynamicColors = booleanPreferencesKey("dynamic_colors")
@@ -74,6 +77,8 @@ class SettingsRepository(private val context: Context) : StrategySettings {
     private val gestures = booleanPreferencesKey("gestures")
     private val sponsorBlock = booleanPreferencesKey("sponsor_block")
     private val launches = intPreferencesKey("launches")
+    private val autoUpdate = booleanPreferencesKey("auto_update")
+    private val lastUpdateCheck = androidx.datastore.preferences.core.longPreferencesKey("last_update_check")
     private fun sponsorKey(c: SponsorCategory) = stringPreferencesKey("sb_" + c.key)
 
     private val data: Flow<Preferences> get() = context.dataStore.data
@@ -98,6 +103,7 @@ class SettingsRepository(private val context: Context) : StrategySettings {
             speed = p[speed] ?: 1f,
             gestures = p[gestures] ?: true,
             sponsorBlock = p[sponsorBlock] ?: true,
+            autoUpdate = p[autoUpdate] ?: true,
             sponsor = SponsorCategory.entries.associateWith { enumOf(p[sponsorKey(it)], it.default) },
         )
     }
@@ -136,6 +142,11 @@ class SettingsRepository(private val context: Context) : StrategySettings {
     suspend fun setSpeed(v: Float) = edit { it[speed] = v }
     suspend fun setGestures(v: Boolean) = edit { it[gestures] = v }
     suspend fun setSponsorBlock(v: Boolean) = edit { it[sponsorBlock] = v }
+    suspend fun setAutoUpdate(v: Boolean) = edit { it[autoUpdate] = v }
+
+    override suspend fun autoCheck(): Boolean = data.first()[autoUpdate] ?: true
+    override suspend fun lastCheck(): Long = data.first()[lastUpdateCheck] ?: 0L
+    override suspend fun setLastCheck(time: Long) = edit { it[lastUpdateCheck] = time }
     suspend fun setSponsorAction(c: SponsorCategory, a: SegmentAction) = edit { it[sponsorKey(c)] = a.name }
 
     /** Номер запуска — первый запуск показывает подсказку про обход. */

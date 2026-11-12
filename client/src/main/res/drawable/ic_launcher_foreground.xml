@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Логотип Tube Player: скруглённая кнопка «play» с плавным зелёным переходом и бежевой окантовкой.
+<!-- Логотип Tube Player: скруглённая кнопка «play» с плавным нежно-фиолетовым переходом и бежевой окантовкой.
      Окантовка рисуется под заливкой — внутренние углы остаются такими же круглыми, как внешние. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -21,9 +21,9 @@
                 android:startX="40"
                 android:startY="34"
                 android:type="linear">
-                <item android:color="#FFA8F290" android:offset="0" />
-                <item android:color="#FF33CC33" android:offset="0.5" />
-                <item android:color="#FF128F3A" android:offset="1" />
+                <item android:color="#FFE9DEFF" android:offset="0" />
+                <item android:color="#FFBCA4F7" android:offset="0.5" />
+                <item android:color="#FF8F72E3" android:offset="1" />
             </gradient>
         </aapt:attr>
     </path>

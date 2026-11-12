@@ -66,6 +66,7 @@ fun HomeScreen(
     onRetry: () -> Unit,
     padding: PaddingValues,
     hideShorts: Boolean,
+    banner: @Composable () -> Unit = {},
 ) {
     FeedGrid(
         state, onOpen, onMore, onRetry,
@@ -73,6 +74,7 @@ fun HomeScreen(
         hideShorts = hideShorts,
         empty = tr("Здесь пока пусто", "Nothing here yet"),
     ) {
+        item(span = { GridItemSpan(maxLineSpan) }) { banner() }
         item(span = { GridItemSpan(maxLineSpan) }) {
             ChipsRow(HomeSection.entries, section, { homeSectionLabel(it) }, onSection, Modifier.padding(bottom = 4.dp))
         }

@@ -53,6 +53,8 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.tube.ui.glass.liquidGlass
+import com.tube.ui.glass.glassRim
+import androidx.compose.ui.draw.clip
 import com.tube.ui.theme.Motion
 import com.tube.ui.theme.Shapes
 import com.tube.ui.theme.TubeTheme
@@ -67,11 +69,13 @@ private val MaxSheetWidth = 640.dp
 /**
  * Стеклянный лист поверх экрана. Появляется, «вырастая» снизу,
  * закрывается свайпом вниз, тапом по фону или жестом «назад» с предпросмотром.
+ * [solid] — непрозрачный лист (как в YouTube): содержимое экрана под ним не просвечивает.
  */
 @Composable
 fun GlassSheet(
     visible: Boolean,
     onDismiss: () -> Unit,
+    solid: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = TubeTheme.colors
@@ -178,7 +182,16 @@ fun GlassSheet(
                     // На планшете и в горизонтальном виде лист не растягивается во всю ширину.
                     .widthIn(max = MaxSheetWidth)
                     .fillMaxWidth()
-                    .liquidGlass(Shapes.Sheet, tint = colors.background.copy(alpha = if (colors.isDark) 0.74f else 0.66f))
+                    .then(
+                        if (solid) {
+                            Modifier
+                                .background(colors.background, Shapes.Sheet)
+                                .glassRim(Shapes.Sheet, colors.glassStroke)
+                                .clip(Shapes.Sheet)
+                        } else {
+                            Modifier.liquidGlass(Shapes.Sheet, tint = colors.background.copy(alpha = if (colors.isDark) 0.74f else 0.66f))
+                        },
+                    )
                     .then(
                         if (visible) {
                             Modifier.clickable(interactionSource = null, indication = null) { /* не пропускать тапы к фону */ }

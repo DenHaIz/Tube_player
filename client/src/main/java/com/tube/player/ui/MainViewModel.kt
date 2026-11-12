@@ -81,9 +81,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val recent = container.library.history.items.value.take(3).map { it.video.url }
         if (recent.isEmpty()) {
-            val music = runCatching { repo.kiosk(Kiosk.Music).items }.getOrDefault(emptyList())
-            val gaming = runCatching { repo.kiosk(Kiosk.Gaming).items }.getOrDefault(emptyList())
-            return interleave(listOf(music, gaming)).ifEmpty { error("empty") }
+            val music = runCatching { repo.kiosk(Kiosk.Music).items }
+            val gaming = runCatching { repo.kiosk(Kiosk.Gaming).items }
+            val mixed = interleave(listOf(music.getOrDefault(emptyList()), gaming.getOrDefault(emptyList())))
+            // Оба раздела не загрузились — показываем настоящую причину, а не «пусто».
+            if (mixed.isEmpty()) (music.exceptionOrNull() ?: gaming.exceptionOrNull())?.let { throw it }
+            return mixed
         }
         val related = viewModelScopeAsync(recent) { url -> repo.video(url).related.filterIsInstance<VideoItem>() }
         val watched = container.library.history.items.value.map { it.video.id }.toSet()
@@ -261,6 +264,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Адрес аккаунта, выбранного на телефоне, — подставляется на страницу входа Google. */
+    var loginEmail by mutableStateOf<String?>(null)
+
     fun signedIn(account: Account) {
         container.accounts.save(account)
         viewModelScope.launch {
@@ -279,6 +285,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     val settings = container.settings
+
+    // Обновления из релизов GitHub (и зеркал): тихая проверка при запуске — не чаще раза в 6 часов.
+    val update = container.updates.state
+
+    init {
+        viewModelScope.launch { container.updates.checkIfDue() }
+    }
+
+    fun checkUpdate() = viewModelScope.launch { container.updates.check() }
+    fun downloadUpdate(release: com.tube.update.Release) = viewModelScope.launch { container.updates.download(release) }
+    fun dismissUpdate() = container.updates.dismiss()
+
     val bypassStatus = container.bypass.status
     val pickProgress = container.autoPick.progress
     val networkResults = container.results.all

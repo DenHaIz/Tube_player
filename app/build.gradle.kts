@@ -70,6 +70,7 @@ kotlin {
 dependencies {
     implementation(project(":core-byedpi"))
     implementation(project(":core-strategy"))
+    implementation(project(":core-update"))
     implementation(project(":core-tunnel"))
     implementation(project(":core-ui"))
 

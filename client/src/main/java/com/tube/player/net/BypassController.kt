@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -24,7 +25,11 @@ sealed interface BypassStatus {
     /** Обход выключен — соединения напрямую (имена через DoH). */
     data object Off : BypassStatus
     data object Starting : BypassStatus
-    data class Running(val strategy: Strategy, val port: Int, val check: WatchdogStatus? = null) : BypassStatus
+    /**
+     * [check] — сторож (пробы прямо через byedpi), [appOk] — настоящий запрос приложения через OkHttp
+     * (тот же путь, что у ленты и видео); null — ещё не проверяли.
+     */
+    data class Running(val strategy: Strategy, val port: Int, val check: WatchdogStatus? = null, val appOk: Boolean? = null, val appError: String? = null) : BypassStatus
     data class Failed(val message: String) : BypassStatus
 }
 
@@ -78,6 +83,8 @@ class BypassController(
             return@withLock
         }
         _status.value = BypassStatus.Running(strategy, endpoint.port)
+        appCheck?.cancel()
+        appCheck = scope.launch { checkAppPath(endpoint.port) }
         watchdog = scope.launch {
             StrategyWatchdog(
                 context, network, results, autoPick, settings,
@@ -97,6 +104,37 @@ class BypassController(
 
     /** Порт работающего byedpi для ProxySelector; null — соединения напрямую. */
     val port: Int? get() = proxy.port
+
+    /** Клиент приложения для проверки пути «OkHttp → byedpi → YouTube». */
+    var httpClient: (() -> okhttp3.OkHttpClient)? = null
+    private var appCheck: Job? = null
+
+    /**
+     * Проверка тем же путём, что у ленты и плеера (OkHttp → SOCKS byedpi → youtube.com): сторож проверяет byedpi
+     * напрямую и не увидит, если приложение до прокси не достучалось. Повторяется раз в 10 минут.
+     */
+    private suspend fun checkAppPath(port: Int) {
+        val client = httpClient ?: return
+        while (true) {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    client().newCall(okhttp3.Request.Builder().url("https://www.youtube.com/generate_204").build()).execute().use { it.code in 200..399 }
+                }
+            }
+            val running = _status.value as? BypassStatus.Running ?: return
+            if (running.port != port) return
+            _status.value = running.copy(appOk = result.getOrDefault(false), appError = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName })
+            kotlinx.coroutines.delay(if (result.getOrDefault(false)) 10 * 60_000L else 30_000L)
+        }
+    }
+
+    /** Подождать, пока byedpi запускается (для запросов, начатых в это время); не дольше [maxMs]. */
+    fun awaitReady(maxMs: Long) {
+        if (_status.value != BypassStatus.Starting) return
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(maxMs) { status.first { it != BypassStatus.Starting } }
+        }
+    }
 
     /** Выбрать стратегию (вручную или сторожем): глобально и для текущей сети, и перезапустить прокси. */
     suspend fun choose(id: String) {

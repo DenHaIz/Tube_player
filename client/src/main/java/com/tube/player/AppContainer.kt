@@ -22,6 +22,8 @@ import com.tube.strategy.AutoPick
 import com.tube.strategy.NetworkKind
 import com.tube.strategy.NetworkMonitor
 import com.tube.strategy.ResultsStore
+import com.tube.update.UpdateChecker
+import com.tube.update.UpdateSource
 import com.tube.ui.i18n.AppLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +57,7 @@ class AppContainer(context: Context) {
     val bypass: BypassController by lazy { BypassController(appContext, settingsRepository, proxy, network, results, autoPick, scope) }
 
     /** Один OkHttp на всё: NewPipe, превью, SponsorBlock, InnerTube — через byedpi. */
-    val http: OkHttpClient by lazy { Http.client(port = { proxy.port }, adBlock = { current.adBlock }) }
+    val http: OkHttpClient by lazy { Http.client(port = { proxy.port }, adBlock = { current.adBlock }, awaitReady = { bypass.awaitReady(it) }) }
     val mediaDataSource: DataSource.Factory by lazy { YoutubeDataSource.factory(Http.mediaClient(http)) }
 
     val repository: Repository by lazy {
@@ -66,6 +68,13 @@ class AppContainer(context: Context) {
     val sponsorBlock: SponsorBlock by lazy { SponsorBlock { http } }
     val returnDislike: ReturnDislike by lazy { ReturnDislike { http } }
     val accounts: AccountStore by lazy { AccountStore(appContext) }
+    val updates: UpdateChecker by lazy {
+        UpdateChecker(
+            appContext,
+            UpdateSource("DenHaIz/Tube_player", "TubePlayer-", BuildConfig.VERSION_NAME, "TubePlayer/${BuildConfig.VERSION_NAME}"),
+            settingsRepository,
+        )
+    }
     val innerTube: InnerTube by lazy { InnerTube({ http }) { accounts.account.value } }
 
     /** Плеер создаётся на главном потоке (ExoPlayer привязан к нему). */
@@ -82,6 +91,7 @@ class AppContainer(context: Context) {
 
     /** Запуск обхода; смена порта byedpi сбрасывает пул соединений — новые пойдут через новый прокси. */
     fun start() {
+        bypass.httpClient = { http }
         bypass.start()
         scope.launch {
             proxy.endpoint.map { it?.port }.distinctUntilChanged().drop(1).collect { http.connectionPool.evictAll() }

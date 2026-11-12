@@ -37,7 +37,7 @@ import com.tube.byedpi.Strategies
 import com.tube.dpi.BuildConfig
 import com.tube.dpi.data.ThemeMode
 import com.tube.dpi.system.OemPower
-import com.tube.dpi.update.UpdateState
+import com.tube.update.UpdateState
 import com.tube.dpi.vpn.TunnelStatus
 import com.tube.dpi.vpn.VpnController
 import com.tube.ui.components.LiquidSegmented

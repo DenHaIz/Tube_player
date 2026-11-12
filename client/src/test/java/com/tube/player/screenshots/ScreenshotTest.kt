@@ -308,6 +308,31 @@ class ScreenshotTest {
     }
 
     @Test
+    @Config(qualifiers = "w411dp-h914dp-xxhdpi", fontScale = 1.3f)
+    fun settingsSheetLargeFont() {
+        render(dark = true, sheet = Sheet.Settings)
+        shot("sheet_settings_large_font")
+    }
+
+    @Test
+    fun updateSheet() {
+        render(sheet = Sheet.Update) { _ ->
+            app.container.updates.previewAvailable(
+                com.tube.update.Release(
+                    version = "0.2",
+                    notes = listOf(
+                        "**RU**", "### Новое", "- Самообновление с GitHub и зеркал", "- Шторки в окне обновления",
+                        "### Исправлено", "- Загрузка через встроенный обход", "- Проверка сторожа",
+                        "**EN**", "### New", "- Self-update", "### Fixed", "- Loading",
+                    ).joinToString("\n"),
+                    apkUrl = "https://github.com/x.apk", apkSize = 1, pageUrl = "https://github.com/x",
+                ),
+            )
+        }
+        shot("sheet_update")
+    }
+
+    @Test
     fun settingsSheetScrolled() {
         render(dark = true, amoled = true, sheet = Sheet.Settings)
         compose.onRoot().performTouchInputSwipeUp()

@@ -7,7 +7,8 @@ import com.tube.byedpi.Strategy
 import com.tube.strategy.AutoPick
 import com.tube.strategy.NetworkMonitor
 import com.tube.strategy.ResultsStore
-import com.tube.dpi.update.UpdateChecker
+import com.tube.update.UpdateChecker
+import com.tube.update.UpdateSource
 import kotlinx.coroutines.flow.first
 import com.tube.dpi.data.SettingsRepository
 import com.tube.dpi.data.ThemeMode
@@ -42,7 +43,9 @@ class AppContainer(context: Context) {
     val network: NetworkMonitor by lazy { NetworkMonitor(appContext) }
     val results: ResultsStore by lazy { ResultsStore(appContext) }
     val autoPick: AutoPick by lazy { AutoPick(appContext, settings, results, network, scope) }
-    val updates: UpdateChecker by lazy { UpdateChecker(appContext, settings) }
+    val updates: UpdateChecker by lazy {
+        UpdateChecker(appContext, UpdateSource("DenHaIz/Tube_DPI", "Tube-", BuildConfig.VERSION_NAME, "Tube/${BuildConfig.VERSION_NAME}"), settings)
+    }
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

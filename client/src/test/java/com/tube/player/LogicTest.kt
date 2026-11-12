@@ -151,6 +151,18 @@ class LogicTest {
     }
 
     @Test
+    fun proxyIsIpv4LoopbackNotIp6Localhost() {
+        // byedpi слушает только 127.0.0.1; ::1 давал «Connection refused» на телефоне.
+        val proxy = com.tube.player.net.BypassProxySelector { 41311 }.select(java.net.URI("https://www.youtube.com/")).single()
+        val address = proxy.address() as java.net.InetSocketAddress
+        assertEquals(java.net.Proxy.Type.SOCKS, proxy.type())
+        assertTrue(address.address is java.net.Inet4Address)
+        assertEquals("127.0.0.1", address.address.hostAddress)
+        assertEquals(41311, address.port)
+        assertEquals(java.net.Proxy.NO_PROXY, com.tube.player.net.BypassProxySelector { null }.select(java.net.URI("https://x/")).single())
+    }
+
+    @Test
     fun adBlockHostsAndPaths() {
         assertTrue(AdBlock.isBlocked("pagead2.googlesyndication.com", "/x"))
         assertTrue(AdBlock.isBlocked("www.youtube.com", "/pagead/viewthroughconversion"))

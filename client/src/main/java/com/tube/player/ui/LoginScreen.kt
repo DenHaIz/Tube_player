@@ -47,13 +47,20 @@ const val LoginUrl = "https://accounts.google.com/ServiceLogin?service=youtube&u
     "https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26next%3Dhttps%253A%252F%252Fwww.youtube.com%252F"
 
 /**
+ * Вход с адресом аккаунта, выбранного в системном списке аккаунтов телефона: Google сразу предлагает подтвердить
+ * вход на телефоне («Да, это я») или ключом доступа — без ввода адреса и пароля (если это включено в аккаунте).
+ */
+fun loginUrl(email: String?): String =
+    if (email.isNullOrBlank()) LoginUrl else LoginUrl + "&Email=" + java.net.URLEncoder.encode(email, "UTF-8") + "&login_hint=" + java.net.URLEncoder.encode(email, "UTF-8")
+
+/**
  * Вход в Google в WebView. Трафик WebView идёт через тот же byedpi (ProxyController), пароль видит только
  * страница Google. Как только открылся youtube.com с cookie SAPISID — вход завершён.
  * Если WebView не умеет прокси (очень старый), вход всё равно пробуем — напрямую.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit) {
+fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit, email: String? = null) {
     var loading by remember { mutableStateOf(true) }
     var proxyReady by remember { mutableStateOf(proxyPort == null || !WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) }
     val direct = Executor { it.run() }
@@ -126,7 +133,7 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit)
                                     }
                                 }
                             }
-                            loadUrl(LoginUrl)
+                            loadUrl(loginUrl(email))
                         }
                     },
                     onRelease = { it.destroy() },

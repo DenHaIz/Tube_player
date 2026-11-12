@@ -28,8 +28,9 @@ YouTube / ReVanced / Morphe ─► TUN (VpnService, addAllowedApplication)
 | `core-byedpi` | byedpi (submodule) собирается **исполняемым** `libbyedpi.so` (свой Gradle-таск `BuildByeDpi`); `ByeDpiProcess`, `StrategyArgs` (разбор/проверка аргументов, `@fake/` только по имени файла), `Strategies` (41 своя + 60 из ByeByeDPI в `ByeByeDpiPack`), `StrategyTester`, `ChromeHello`, `LocalDns`, `Socks5`; `assets/fake` — фейковые ClientHello/QUIC из zapret |
 | `core-tunnel` | hev-socks5-tunnel (submodule, ndk-build) + JNI `TProxyService`, генератор `TunnelConfig` |
 | `core-strategy` | общий для обоих приложений подбор: `AutoPick`, `StrategyWatchdog`, `NetworkMonitor`, `ResultsStore`; настройки — через интерфейс `StrategySettings` (у каждого приложения своё хранилище), смена стратегии — колбэком `onSwitch` |
+| `core-update` | обновления из релизов GitHub для обоих приложений: `UpdateChecker(context, UpdateSource(repo, apkPrefix, …), UpdatePrefs)` — API GitHub → API через зеркало → редирект страницы, APK с GitHub и зеркал с проверкой размера, SHA-256, пакета, версии и подписи; `ReleaseNotes` — разбор описания релиза по языкам и категориям |
 | `core-ui` | тема `TubeTheme` (палитры `Green` — Tube, `Violet` — Tube Player; `amoled`), стекло, пружины, `GlassSheet`, `LiquidSegmented`, строки настроек (`ToggleRow`, `PermissionRow`, `PillButton`, `SheetTitle`), иконки `TubeIcons` |
-| `app` | Tube: `vpn/TubeVpnService`, `VpnController`, `TunnelState`; `autostart/` (служба спецвозможностей + чистая `AutoStartPolicy`); `data/` (настройки — реализует `StrategySettings`); `update/UpdateChecker`; `tile/`, `LaunchActivity` (ярлык); `ui/` |
+| `app` | Tube: `vpn/TubeVpnService`, `VpnController`, `TunnelState`; `autostart/` (служба спецвозможностей + чистая `AutoStartPolicy`); `data/` (настройки — реализует `StrategySettings` и `UpdatePrefs`); `tile/`, `LaunchActivity` (ярлык); `ui/` |
 | `client` | Tube Player — см. раздел ниже |
 
 Ключевые решения и почему:
@@ -77,17 +78,35 @@ InnerTube, SB, RYD┘   (SOCKS5, хост неразрешённым)   └─ �
 WebView входа ─► androidx.webkit ProxyController ─► тот же SOCKS-порт
 ```
 
+- **Адрес прокси — только `127.0.0.1` (IPv4).** byedpi слушает его одного; `InetAddress.getLoopbackAddress()` на части телефонов отдаёт `::1` — в 0.1 из-за этого все запросы приложения получали «Connection refused», а сторож (он ходит в byedpi сам через `Socks5`, по 127.0.0.1) считал обход рабочим. Теперь `BypassProxySelector.Loopback4`, а `BypassController` раз в 10 минут проверяет и путь самого приложения (OkHttp → byedpi → `youtube.com/generate_204`): `Running.appOk` — красная точка и причина в листе обхода. Пока byedpi запускается, запросы ждут его (`ProxyGate`, до 10 с), а не уходят напрямую.
 - **Обход без VPN.** `net/BypassProxy` поднимает byedpi на `ByeDpiProcess.freePort()`; `BypassController` берёт стратегию сети (`ResultsStore.chosen`) или из настроек и запускает сторож из `:core-strategy` (первая проверка через 5 с); при сбое — замена или полный подбор в фоне. Порт меняется при смене стратегии: OkHttp читает его в `ProxySelector` на каждом новом соединении, пул сбрасывается (`AppContainer.start`). Плеер работает рядом с любым VPN.
 - **Видео.** `youtube/Repository` — NewPipe (поиск, киоски `trending_music/gaming/movies_and_shows/podcasts_episodes`, `live`; канал, плейлист, RSS канала, `StreamInfo`). Обычного «Trending» в NewPipe 0.27 нет. Потоки NewPipe 0.27 отдаёт от клиента **VISIONOS**: загрузка идёт POST с телом `x\0`, параметром `rn` и User-Agent visionOS (`player/YoutubeDataSource`, как `YoutubeHttpDataSource` у NewPipe), редиректы — с сохранением POST (`KeepPostRedirects`, клиент без followRedirects).
 - **DASH.** `player/DashManifest` собирает один MPD на всё видео: AdaptationSet на семейство кодека (avc1, vp9; AV1 не берём — программный декодер), все качества внутри → в Media3 работают «Авто» (ABR) и ручной выбор (`TrackSelectionOverride`); предел качества по сети (Wi-Fi/мобильная) — `setMaxVideoSize`. Нет индексов → видео+звук (`MergingMediaSource`), совсем старые → itag 18, эфиры → HLS. 403/410 (ссылки протухли) → заново `StreamInfo` и продолжение с той же позиции.
 - **Плеер** (`PlayerController`) — один ExoPlayer на процесс; `PlaybackService` (MediaSessionService) — уведомление, фон, обложка через тот же OkHttp. PiP — `setAutoEnterEnabled` на 12+, `onUserLeaveHint` на 8–11, кнопка пауза/играть. Плавающее окно — `PopupPlayer` (`TYPE_APPLICATION_OVERLAY`, TextureView, перетаскивание, щипок, двойной тап — развернуть, бросок вниз — закрыть); нужно разрешение «Поверх других приложений».
 - **Без рекламы.** Ролики идут не через плеер YouTube — рекламы в них нет; `AdBlock` режет рекламные и следящие адреса в OkHttp и WebView и выкидывает рекламные элементы выдачи InnerTube (`adSlotRenderer`, `promotedVideoRenderer` …). **SponsorBlock** — запрос по 4 символам SHA-256 id видео, категории: пропуск / кнопка / метка / нет; отрезки на полосе прокрутки, «Отменить» после пропуска. **Return YouTube Dislike** — дизлайки.
-- **Аккаунт — необязательный.** `LoginScreen`: WebView на accounts.google.com через byedpi (`ProxyController`, UA без `wv`); после входа cookie youtube.com (SAPISID…) и `VISITOR_DATA` → `AccountStore` (файл, AES-GCM ключом Android Keystore). `InnerTube`: `browse` FEwhat_to_watch / FEsubscriptions / FEchannels, `Authorization: SAPISIDHASH`, разбор готовыми экстракторами NewPipe (`YoutubeStreamInfoItemExtractor`, `…LockupExtractor`). NewPipe всегда анонимный — cookie туда не передаются. Без входа «Для вас» = похожие на недавно просмотренные, подписки — локальные (RSS).
+- **Аккаунт — необязательный.** Сначала системный выбор аккаунта (`AccountManager.newChooseAccountIntent`, приложение получает только адрес): адрес подставляется на страницу входа (`Email=`/`login_hint`), и Google предлагает подтвердить вход на телефоне или ключом доступа. Взять сессию YouTube у системного аккаунта Google стороннее приложение не может (токены `weblogin:` выдаются только приложениям Google; ReVanced для этого нужен MicroG). `LoginScreen`: WebView на accounts.google.com через byedpi (`ProxyController`, UA без `wv`); после входа cookie youtube.com (SAPISID…) и `VISITOR_DATA` → `AccountStore` (файл, AES-GCM ключом Android Keystore). `InnerTube`: `browse` FEwhat_to_watch / FEsubscriptions / FEchannels, `Authorization: SAPISIDHASH`, разбор готовыми экстракторами NewPipe (`YoutubeStreamInfoItemExtractor`, `…LockupExtractor`). NewPipe всегда анонимный — cookie туда не передаются. Без входа «Для вас» = похожие на недавно просмотренные, подписки — локальные (RSS).
 - **Данные** — JSON + `AtomicFile` (`data/Library`: история до 1000, позиции, подписки, поиск), настройки — DataStore. Room не нужен.
-- **Интерфейс — как оригинальный YouTube** (по просьбе владельца, в отличие от Tube): текст слева, аватар рядом с заголовком, превью во всю ширину на телефоне и сетка на планшете, чипы 32dp, «Подписаться» справа, нижняя панель Главная / Подписки / Вы, мини-плеер над ней. Палитра `TubePalette.Violet` (без зелёного), AMOLED. Анимации быстрые и плавные (`ui/Anim`, 120–250 мс). Логотип — скруглённая кнопка «play» с зелёным градиентом и бежевой окантовкой (окантовка рисуется под заливкой, иначе внутренние углы острые).
+- **Интерфейс — как оригинальный YouTube** (по просьбе владельца, в отличие от Tube): текст слева, аватар рядом с заголовком, превью во всю ширину на телефоне и сетка на планшете, чипы 32dp, «Подписаться» справа, нижняя панель Главная / Подписки / Вы, мини-плеер над ней. Палитра `TubePalette.Violet` (без зелёного), AMOLED. Анимации быстрые и плавные (`ui/Anim`, 120–250 мс). Логотип — скруглённая кнопка «play» с нежно-фиолетовым градиентом и бежевой окантовкой (окантовка рисуется под заливкой, иначе внутренние углы острые).
 - Навигация своя: вкладки + стек `Route` в `MainViewModel`, страница видео — слой поверх (свернуть = мини-плеер). Телефон боком с открытым видео — плеер на весь экран без панелей; ширина ≥ 900dp — похожие справа.
 
 Проверки: `LogicTest` (SAPISIDHASH, SponsorBlock, MPD + разбор Media3, правила запросов googlevideo, AdBlock, разбор InnerTube, библиотека), `PipelineNetworkTest` (`-Pnetwork`: поиск, киоск, подсказки, `StreamInfo`, 256 КБ видео и звука через SOCKS, ExoPlayer доходит до READY и играет 2 с), `ScreenshotTest` (`-Pscreenshots`: главная светлая / AMOLED / EN / боком / планшет, мини-плеер, поиск, видео телефон / AMOLED / планшет, канал, библиотека, подписки, листы, логотип). В сетевом тесте ExoPlayer ждём по реальному времени: `TestPlayerRunHelper` на часах Robolectric не дожидается READY при настоящих загрузках.
+
+**Обновления** — `core-update` с репозиторием `DenHaIz/Tube_player` и APK `TubePlayer-X.Y.apk`: проверка при запуске (не чаще раза в 6 часов, отключается в настройках), полоса «Доступна версия» над лентой, лист обновления — категории описания в свёрнутых «шторках» (`ReleaseNotes`), установка через FileProvider `${applicationId}.files`. Описание релиза писать категориями:
+
+```
+**RU**
+### Новое
+- …
+### Исправлено
+- …
+**EN**
+### New
+- …
+### Fixed
+- …
+```
+
+Листы плеера — непрозрачные (`GlassSheet(solid = true)`): у прозрачного стекла содержимое экрана просвечивало сквозь текст. Варианты в настройках — капсулы с переносом (`Segmented`), подписи не обрезаются при крупном шрифте (скриншот `sheet_settings_large_font`, fontScale 1.3).
 
 ### Релиз Tube Player
 
@@ -141,6 +160,7 @@ Release подписан debug-ключом общего тулчейна (`.too
 
 ## История версий
 
+- **Tube Player 0.2** — исправлена загрузка (прокси `::1` → `127.0.0.1`), сторож проверяет и путь приложения, запросы ждут запуска byedpi; самообновление с GitHub и зеркал со «шторками» категорий; вход через выбор аккаунта телефона; непрозрачные листы, варианты не обрезаются; логотип — нежно-фиолетовый с бежевой окантовкой.
 - **Tube Player 0.1** — первый выпуск клиента: поиск, главная (тренды и «Для вас»), каналы, плейлисты, DASH с выбором качества, фон, PiP, плавающее окно, история и подписки, SponsorBlock, дизлайки, блокировщик рекламы, AMOLED, необязательный вход в Google; обход — встроенный byedpi без VPN.
 
 - **0.1** — VPN + byedpi + hev, автозапуск, подбор, DoH для byedpi, ~80 стратегий.

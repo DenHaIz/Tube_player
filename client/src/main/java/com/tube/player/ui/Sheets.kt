@@ -15,6 +15,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,7 +37,6 @@ import com.tube.player.sponsorblock.SegmentAction
 import com.tube.player.sponsorblock.SponsorCategory
 import com.tube.strategy.NetworkResults
 import com.tube.strategy.TestProgress
-import com.tube.ui.components.LiquidSegmented
 import com.tube.ui.components.PillButton
 import com.tube.ui.components.StatusDot
 import com.tube.ui.components.bouncyClickable
@@ -48,24 +48,32 @@ import com.tube.ui.theme.TubeIcons
 import com.tube.ui.theme.TubeTheme
 import com.tube.ui.theme.dynamicColorsSupported
 
-/** Переключатель-капсула с жидким индикатором, подписи по центру. */
+/**
+ * Выбор одного варианта: скруглённые капсулы с переносом строк. В отличие от сегментов, подписи никогда
+ * не обрезаются — ни при крупном шрифте, ни на узком экране; выбранная плавно заливается акцентом.
+ */
 @Composable
 fun <T> Segmented(options: List<T>, selected: T, label: @Composable (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
     val colors = TubeTheme.colors
-    LiquidSegmented(
-        count = options.size,
-        selectedIndex = options.indexOf(selected).coerceAtLeast(0),
-        onSelect = { onSelect(options[it]) },
-        pillColor = colors.accent,
-        modifier = modifier.fillMaxWidth().height(44.dp).background(colors.chip, Shapes.Pill),
-    ) { index, active ->
-        Text(
-            label(options[index]),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (active) colors.onAccent else colors.textPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    androidx.compose.foundation.layout.FlowRow(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            val active = option == selected
+            val bg by androidx.compose.animation.animateColorAsState(if (active) colors.accent else colors.chip, Anim.fade(), label = "opt")
+            val fg by androidx.compose.animation.animateColorAsState(if (active) colors.onAccent else colors.textPrimary, Anim.fade(), label = "optText")
+            Text(
+                label(option),
+                style = MaterialTheme.typography.labelLarge,
+                color = fg,
+                modifier = Modifier
+                    .bouncyClickable(pressedScale = 0.94f) { onSelect(option) }
+                    .background(bg, Shapes.Pill)
+                    .padding(horizontal = 16.dp, vertical = 9.dp),
+            )
+        }
     }
 }
 
@@ -89,6 +97,7 @@ fun SettingsSheet(
     edit: (suspend SettingsRepository.() -> Unit) -> Unit,
     onAccount: () -> Unit,
     onBypass: () -> Unit,
+    onUpdates: () -> Unit = {},
 ) {
     Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SheetTitle(tr("Настройки", "Settings"), "Tube Player ${BuildConfig.VERSION_NAME}")
@@ -165,6 +174,12 @@ fun SettingsSheet(
             ToggleRow(tr("Дизлайки", "Dislikes"), "Return YouTube Dislike", s.returnDislikes) { v -> edit { setReturnDislikes(v) } }
         }
 
+        SettingsCard(tr("Обновления", "Updates")) {
+            ToggleRow(tr("Проверять при запуске", "Check on launch"), tr("GitHub, при недоступности — зеркала", "GitHub, mirrors if it's unreachable"), s.autoUpdate) { v -> edit { setAutoUpdate(v) } }
+            Gap()
+            PillButton(tr("Проверить обновления", "Check for updates"), onClick = onUpdates, icon = TubeIcons.Bolt, compact = true)
+        }
+
         SettingsCard("SponsorBlock") {
             ToggleRow(tr("Пропускать вставки", "Skip segments"), tr("Спонсоры, заставки, просьбы подписаться", "Sponsors, intros, reminders"), s.sponsorBlock) { v -> edit { setSponsorBlock(v) } }
             if (s.sponsorBlock) {
@@ -212,12 +227,18 @@ fun BypassSheet(
             BypassStatus.Starting -> Triple(colors.warning, tr("Запускается", "Starting"), null)
             is BypassStatus.Failed -> Triple(colors.danger, tr("Ошибка", "Error"), status.message)
             is BypassStatus.Running -> Triple(
-                when (status.check?.ok) { true -> colors.success; false -> colors.warning; null -> colors.accent },
+                when {
+                    status.appOk == false -> colors.danger
+                    status.check?.ok == false -> colors.warning
+                    status.check?.ok == true || status.appOk == true -> colors.success
+                    else -> colors.accent
+                },
                 status.strategy.name,
-                when (status.check?.ok) {
-                    true -> tr("YouTube доступен", "YouTube reachable")
-                    false -> tr("Проверка не прошла — ищу замену", "Check failed — looking for another")
-                    null -> tr("Проверяю…", "Checking…")
+                when {
+                    status.appOk == false -> tr("Приложение не достучалось до YouTube: ", "The app couldn't reach YouTube: ") + status.appError.orEmpty()
+                    status.check?.ok == false -> tr("Проверка не прошла — ищу замену", "Check failed — looking for another")
+                    status.appOk == true -> tr("YouTube доступен", "YouTube reachable")
+                    else -> tr("Проверяю…", "Checking…")
                 },
             )
         }

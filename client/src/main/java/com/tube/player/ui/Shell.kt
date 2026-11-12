@@ -84,7 +84,7 @@ import com.tube.strategy.NetworkKind
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 
-enum class Sheet { None, Settings, Bypass, Quality, Account }
+enum class Sheet { None, Settings, Bypass, Quality, Account, Update }
 
 /** То, что умеет только активность: PiP, полный экран, «поделиться», разрешения. */
 class ShellActions(
@@ -95,6 +95,10 @@ class ShellActions(
     val popup: () -> Unit,
     /** Слушать в фоне: свернуть приложение, звук продолжится. */
     val background: () -> Unit,
+    /** Открыть скачанный APK в системном установщике (сначала — разрешение «Установка приложений»). */
+    val installUpdate: (java.io.File) -> Unit = {},
+    /** Системный выбор аккаунта Google телефона; в колбэк — адрес (null — отказались или аккаунтов нет). */
+    val chooseAccount: ((String?) -> Unit) -> Unit = { it(null) },
 )
 
 private val TopBarHeight = 56.dp
@@ -121,6 +125,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
     val history by vm.history.collectAsStateWithLifecycle()
     val searches by vm.searches.collectAsStateWithLifecycle()
     val bypass by vm.bypassStatus.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
     val route = vm.stack.lastOrNull()
     val login = route == Route.Login
     val searching = route == Route.Search
@@ -162,7 +167,9 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         Tab.Home -> {
                             val feed = vm.homeFeed(vm.section)
                             LaunchedEffect(vm.section) { feed.ensure() }
-                            HomeScreen(vm.section, feed.state, { vm.section = it }, vm::open, feed::loadMore, feed::refresh, padding, hideShorts)
+                            HomeScreen(vm.section, feed.state, { vm.section = it }, vm::open, feed::loadMore, feed::refresh, padding, hideShorts) {
+                                UpdateBanner(update, onOpen = { sheet = Sheet.Update })
+                            }
                         }
                         Tab.Subscriptions -> {
                             LaunchedEffect(subscriptions.size, account) { vm.subscriptionsFeed.refresh() }
@@ -198,7 +205,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         Route.Login -> LoginScreen(container.proxy.port, onDone = { acc ->
                             vm.signedIn(acc)
                             vm.back()
-                        }, onClose = { vm.back() })
+                        }, onClose = { vm.back() }, email = vm.loginEmail)
                     }
                 }
             }
@@ -250,10 +257,17 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
             }
 
             val close = { sheet = Sheet.None }
-            GlassSheet(sheet == Sheet.Settings, close) {
-                SettingsSheet(settings, account, vm::settingsAction, onAccount = { sheet = Sheet.Account }, onBypass = { sheet = Sheet.Bypass })
+            GlassSheet(sheet == Sheet.Settings, close, solid = true) {
+                SettingsSheet(
+                    settings, account, vm::settingsAction,
+                    onAccount = { sheet = Sheet.Account }, onBypass = { sheet = Sheet.Bypass },
+                    onUpdates = {
+                        if (update.release == null) vm.checkUpdate()
+                        sheet = Sheet.Update
+                    },
+                )
             }
-            GlassSheet(sheet == Sheet.Bypass, close) {
+            GlassSheet(sheet == Sheet.Bypass, close, solid = true) {
                 val progress by vm.pickProgress.collectAsStateWithLifecycle()
                 val all by vm.networkResults.collectAsStateWithLifecycle()
                 val network by vm.network.collectAsStateWithLifecycle()
@@ -273,18 +287,34 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     onRestart = { container.bypass.restart() },
                 )
             }
-            GlassSheet(sheet == Sheet.Quality, close) {
+            GlassSheet(sheet == Sheet.Quality, close, solid = true) {
                 QualitySheet(state, onQuality = { playback.setQuality(it) }, onSpeed = { sp ->
                     playback.setSpeed(sp)
                     if (settings.rememberSpeed) vm.settingsAction { setSpeed(sp) }
                 })
             }
-            GlassSheet(sheet == Sheet.Account, close) {
+            GlassSheet(sheet == Sheet.Update, close, solid = true) {
+                UpdateSheet(
+                    update,
+                    onCheck = { vm.checkUpdate() },
+                    onDownload = { vm.downloadUpdate(it) },
+                    onInstall = { (update as? com.tube.update.UpdateState.Ready)?.let { actions.installUpdate(it.apk) } },
+                    onLater = {
+                        vm.dismissUpdate()
+                        sheet = Sheet.None
+                    },
+                )
+            }
+            GlassSheet(sheet == Sheet.Account, close, solid = true) {
                 AccountSheet(
                     account, vm.importing, vm.importedCount,
                     onSignIn = {
                         sheet = Sheet.None
-                        vm.push(Route.Login)
+                        // Сначала — аккаунт, уже добавленный на телефоне: вход тогда без ввода адреса и пароля.
+                        actions.chooseAccount { email ->
+                            vm.loginEmail = email
+                            vm.push(Route.Login)
+                        }
                     },
                     onImport = vm::importSubscriptions,
                     onSignOut = vm::signOut,
@@ -294,7 +324,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
     }
 }
 
-/** Логотип: скруглённая кнопка «play» с плавным зелёным переходом и бежевой окантовкой (как значок приложения). */
+/** Логотип: скруглённая кнопка «play» с плавным нежно-фиолетовым переходом и бежевой окантовкой (как значок приложения). */
 @Composable
 fun Logo(size: Dp, modifier: Modifier = Modifier) {
     Canvas(modifier.size(size)) {
@@ -316,7 +346,7 @@ fun Logo(size: Dp, modifier: Modifier = Modifier) {
         drawPath(
             path,
             Brush.linearGradient(
-                0f to Color(0xFFA8F290), 0.5f to Color(0xFF33CC33), 1f to Color(0xFF128F3A),
+                0f to Color(0xFFE9DEFF), 0.5f to Color(0xFFBCA4F7), 1f to Color(0xFF8F72E3),
                 start = androidx.compose.ui.geometry.Offset(x(40f), y(32f)),
                 end = androidx.compose.ui.geometry.Offset(x(76f), y(74f)),
             ),
@@ -400,7 +430,11 @@ private fun TopBar(
                     Icon(TubeIcons.Shield, tr("Обход", "Unblocking"), tint = colors.textPrimary, modifier = Modifier.size(24.dp))
                     val dot by animateColorAsState(
                         when (bypass) {
-                            is BypassStatus.Running -> if (bypass.check?.ok == false) colors.warning else colors.accent
+                            is BypassStatus.Running -> when {
+                                bypass.appOk == false -> colors.danger
+                                bypass.check?.ok == false || bypass.appOk == null -> colors.warning
+                                else -> colors.accent
+                            }
                             BypassStatus.Starting -> colors.warning
                             is BypassStatus.Failed -> colors.danger
                             BypassStatus.Off -> colors.textTertiary

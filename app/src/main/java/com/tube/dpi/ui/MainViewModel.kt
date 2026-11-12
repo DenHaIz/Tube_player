@@ -14,8 +14,8 @@ import com.tube.strategy.NetworkId
 import com.tube.strategy.NetworkResults
 import com.tube.dpi.data.ThemeMode
 import com.tube.strategy.TestProgress
-import com.tube.dpi.update.Release
-import com.tube.dpi.update.UpdateState
+import com.tube.update.Release
+import com.tube.update.UpdateState
 import com.tube.dpi.vpn.TunnelState
 import com.tube.dpi.vpn.VpnController
 import com.tube.ui.i18n.AppLanguage

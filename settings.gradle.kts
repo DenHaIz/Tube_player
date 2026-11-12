@@ -18,4 +18,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Tube"
-include(":core-byedpi", ":core-strategy", ":core-tunnel", ":core-ui", ":app", ":client")
+include(":core-byedpi", ":core-strategy", ":core-update", ":core-tunnel", ":core-ui", ":app", ":client")

@@ -1,4 +1,4 @@
-package com.tube.dpi.update
+package com.tube.update
 
 import android.content.Context
 import android.content.Intent
@@ -8,13 +8,10 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
-import com.tube.dpi.BuildConfig
-import com.tube.dpi.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -43,18 +40,40 @@ sealed interface UpdateState {
     data class Failed(val message: String) : UpdateState
 }
 
+/** Откуда и что обновлять: репозиторий GitHub и имя APK в релизе (`Tube-X.Y.apk`, `TubePlayer-X.Y.apk`). */
+data class UpdateSource(
+    /** «DenHaIz/Tube_DPI». */
+    val repo: String,
+    /** Начало имени APK: «Tube-» или «TubePlayer-». */
+    val apkPrefix: String,
+    val currentVersion: String,
+    val userAgent: String,
+)
+
+/** Где приложение хранит настройку автопроверки и время последней проверки. */
+interface UpdatePrefs {
+    suspend fun autoCheck(): Boolean
+    suspend fun lastCheck(): Long
+    suspend fun setLastCheck(time: Long)
+}
+
 /**
- * Обновления из релизов github.com/DenHaIz/Tube_DPI: последний релиз сравнивается с версией приложения,
- * APK скачивается в кэш и открывается системным установщиком (подпись та же, поэтому ставится поверх).
+ * Обновления из релизов GitHub (Tube — DenHaIz/Tube_DPI, Tube Player — DenHaIz/Tube_player): последний релиз
+ * сравнивается с версией приложения, APK скачивается в кэш и открывается системным установщиком
+ * (подпись та же, поэтому ставится поверх). Нужен FileProvider `${applicationId}.files` с cache-path «updates/».
  */
-class UpdateChecker(private val context: Context, private val settings: SettingsRepository) {
+class UpdateChecker(private val context: Context, private val source: UpdateSource, private val settings: UpdatePrefs) {
+    private val repoUrl = "https://github.com/${source.repo}"
+    private val latestUrl = "https://api.github.com/repos/${source.repo}/releases/latest"
+    private val latestPage = "$repoUrl/releases/latest"
+    private val apkPattern = Regex(Regex.escape(source.apkPrefix) + """\d+(\.\d+){0,3}\.apk""")
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
     /** Тихая проверка при запуске: не чаще раза в [AUTO_INTERVAL_MS] и только если включено. */
     suspend fun checkIfDue() {
-        if (!settings.checkUpdates.first()) return
-        if (System.currentTimeMillis() - settings.lastUpdateCheck.first() < AUTO_INTERVAL_MS) return
+        if (!settings.autoCheck()) return
+        if (System.currentTimeMillis() - settings.lastCheck() < AUTO_INTERVAL_MS) return
         check(silent = true)
     }
 
@@ -62,7 +81,7 @@ class UpdateChecker(private val context: Context, private val settings: Settings
         if (_state.value is UpdateState.Downloading) return
         if (!silent) _state.value = UpdateState.Checking
         val result = withContext(Dispatchers.IO) { runCatching { fetchLatest() } }
-        settings.setLastUpdateCheck(System.currentTimeMillis())
+        settings.setLastCheck(System.currentTimeMillis())
         _state.value = result.fold(
             onSuccess = { release -> if (release != null) UpdateState.Available(release) else if (silent) UpdateState.Idle else UpdateState.UpToDate },
             onFailure = { if (silent) UpdateState.Idle else UpdateState.Failed(it.message ?: it.javaClass.simpleName) },
@@ -82,7 +101,7 @@ class UpdateChecker(private val context: Context, private val settings: Settings
             runCatching {
                 val dir = File(context.cacheDir, "updates").apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
-                val file = File(dir, "Tube-${release.version}.apk")
+                val file = File(dir, "${source.apkPrefix}${release.version}.apk")
                 var lastError: Exception? = null
                 for (url in mirrorsOf(release.apkUrl)) {
                     try {
@@ -151,7 +170,7 @@ class UpdateChecker(private val context: Context, private val settings: Settings
         val pm = context.packageManager
         val archive = archiveInfo(pm, file.absolutePath) ?: error("not an APK")
         if (archive.packageName != context.packageName) error("wrong package")
-        if (!isNewer(archive.versionName.orEmpty(), BuildConfig.VERSION_NAME)) error("not newer")
+        if (!isNewer(archive.versionName.orEmpty(), source.currentVersion)) error("not newer")
         val installed = signatures(installedInfo(pm))
         val incoming = signatures(archive)
         if (installed.isNotEmpty() && incoming.isNotEmpty() && installed != incoming) error("signature mismatch")
@@ -187,6 +206,11 @@ class UpdateChecker(private val context: Context, private val settings: Settings
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
+    /** Для превью и скриншотов: показать найденный релиз без сети. */
+    fun previewAvailable(release: Release) {
+        _state.value = UpdateState.Available(release)
+    }
+
     fun dismiss() {
         _state.value = UpdateState.Idle
     }
@@ -198,10 +222,10 @@ class UpdateChecker(private val context: Context, private val settings: Settings
     private fun fetchLatest(): Release? {
         var lastError: Exception? = null
         val sources: List<() -> Release?> = listOf<() -> Release?>(
-            { fetchFromApi(LATEST_URL) },
-            { fetchFromApi(API_MIRROR + LATEST_URL) },
-            { fetchFromPage(LATEST_PAGE) },
-        ) + PAGE_MIRRORS.map { mirror -> { fetchFromPage(mirror + LATEST_PAGE) } }
+            { fetchFromApi(latestUrl) },
+            { fetchFromApi(API_MIRROR + latestUrl) },
+            { fetchFromPage(latestPage) },
+        ) + PAGE_MIRRORS.map { mirror -> { fetchFromPage(mirror + latestPage) } }
         for (source in sources) {
             try {
                 return source()
@@ -221,28 +245,28 @@ class UpdateChecker(private val context: Context, private val settings: Settings
         }
         val tag = json.getString("tag_name").takeIf { TagPattern.matches(it) } ?: error("bad tag")
         val version = tag.removePrefix("v")
-        if (!isNewer(version, BuildConfig.VERSION_NAME)) return null
+        if (!isNewer(version, source.currentVersion)) return null
         val assets = json.getJSONArray("assets")
         val apk = (0 until assets.length()).map { assets.getJSONObject(it) }
-            .firstOrNull { ApkPattern.matches(it.getString("name")) } ?: return null
+            .firstOrNull { apkPattern.matches(it.getString("name")) } ?: return null
         return Release(
             version = version,
             notes = json.optString("body"),
             // Адрес собираем сами: ответ мог прийти через зеркало.
-            apkUrl = "$REPO_URL/releases/download/$tag/${apk.getString("name")}",
+            apkUrl = "$repoUrl/releases/download/$tag/${apk.getString("name")}",
             apkSize = apk.optLong("size"),
-            pageUrl = "$REPO_URL/releases/tag/$tag",
+            pageUrl = "$repoUrl/releases/tag/$tag",
             sha256 = apk.optString("digest").removePrefix("sha256:").takeIf { it.length == 64 },
         )
     }
 
-    /** …/releases/latest перенаправляет на …/tag/vX.Y; APK у каждого релиза называется Tube-X.Y.apk. */
+    /** …/releases/latest перенаправляет на …/tag/vX.Y; APK у каждого релиза называется <apkPrefix>X.Y.apk. */
     private fun fetchFromPage(url: String): Release? {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 20_000
             instanceFollowRedirects = false
-            setRequestProperty("User-Agent", "Tube/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("User-Agent", source.userAgent)
         }
         val location = try {
             connection.getHeaderField("Location") ?: error("HTTP ${connection.responseCode}")
@@ -251,13 +275,13 @@ class UpdateChecker(private val context: Context, private val settings: Settings
         }
         val tag = location.substringAfterLast("/tag/", "").takeIf { TagPattern.matches(it) } ?: error("no release")
         val version = tag.removePrefix("v")
-        if (!isNewer(version, BuildConfig.VERSION_NAME)) return null
+        if (!isNewer(version, source.currentVersion)) return null
         return Release(
             version = version,
             notes = "",
-            apkUrl = "$REPO_URL/releases/download/$tag/Tube-$version.apk",
+            apkUrl = "$repoUrl/releases/download/$tag/${source.apkPrefix}$version.apk",
             apkSize = 0,
-            pageUrl = "$REPO_URL/releases/tag/$tag",
+            pageUrl = "$repoUrl/releases/tag/$tag",
         )
     }
 
@@ -267,7 +291,7 @@ class UpdateChecker(private val context: Context, private val settings: Settings
             connectTimeout = 10_000
             readTimeout = 20_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Tube/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("User-Agent", source.userAgent)
             headers.forEach { (name, value) -> setRequestProperty(name, value) }
         }
         val code = connection.responseCode
@@ -279,9 +303,6 @@ class UpdateChecker(private val context: Context, private val settings: Settings
     }
 
     companion object {
-        private const val REPO_URL = "https://github.com/DenHaIz/Tube_DPI"
-        private const val LATEST_URL = "https://api.github.com/repos/DenHaIz/Tube_DPI/releases/latest"
-        private const val LATEST_PAGE = "$REPO_URL/releases/latest"
         private const val AUTO_INTERVAL_MS = 6 * 60 * 60_000L
         private const val MAX_APK_BYTES = 100L * 1024 * 1024
 
@@ -291,7 +312,6 @@ class UpdateChecker(private val context: Context, private val settings: Settings
         private val PAGE_MIRRORS = listOf("https://ghfast.top/", "https://ghproxy.net/")
 
         private val TagPattern = Regex("""v\d+(\.\d+){0,3}""")
-        private val ApkPattern = Regex("""Tube-\d+(\.\d+){0,3}\.apk""")
 
         /** Прямая ссылка, затем она же через зеркала. */
         fun mirrorsOf(url: String): List<String> = listOf(url) + DOWNLOAD_MIRRORS.map { it + url }

@@ -161,6 +161,8 @@ fun PlayerView(
     // Растянуть во весь экран без рамок (обрезая края) — только в полноэкранном режиме.
     var fill by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
+    // Удержание пальца в правой половине — ×2, пока палец на экране (как в YouTube).
+    var boosting by remember { mutableStateOf(false) }
 
     LaunchedEffect(controls, touchedAt, progress.playing) {
         if (controls && progress.playing) {
@@ -229,6 +231,28 @@ fun PlayerView(
                     var lastTapAt = 0L
                     var lastTapSide = 0
                     detectTapGestures(
+                        onPress = { offset ->
+                            val p = player
+                            if (p != null && offset.x > width / 2) {
+                                var base = 1f
+                                val boost = scope.launch {
+                                    delay(viewConfiguration.longPressTimeoutMillis)
+                                    base = p.playbackParameters.speed
+                                    p.setPlaybackSpeed(2f)
+                                    if (!p.isPlaying) p.play()
+                                    boosting = true
+                                    controls = false
+                                }
+                                tryAwaitRelease()
+                                boost.cancel()
+                                if (boosting) {
+                                    p.setPlaybackSpeed(base)
+                                    boosting = false
+                                }
+                            }
+                        },
+                        // Задан, чтобы отпускание после удержания не считалось тапом.
+                        onLongPress = {},
                         onTap = { offset ->
                             val side = if (offset.x > width / 2) 1 else -1
                             val now = System.currentTimeMillis()
@@ -335,6 +359,21 @@ fun PlayerView(
             }
         }
         hint?.let { Pill(it, Modifier.align(Alignment.TopCenter).padding(top = 24.dp)) }
+        AnimatedVisibility(
+            boosting,
+            Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
+            enter = fadeIn(Anim.fade()) + androidx.compose.animation.scaleIn(Anim.move(), initialScale = 0.8f),
+            exit = fadeOut(Anim.out()),
+        ) {
+            Row(
+                Modifier.background(Color.Black.copy(alpha = 0.6f), RoundedPill).padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("2×", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                Spacer(Modifier.width(6.dp))
+                Icon(TubeIcons.Forward, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+        }
 
         // Тонкая полоса просмотренного с отметками SponsorBlock, когда контролы спрятаны (как в YouTube).
         AnimatedVisibility(
@@ -456,7 +495,7 @@ private fun Controls(
     onFill: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f))) {
-        // Сверху: свернуть, качество, окно, PiP.
+        // Сверху: свернуть (во весь экран — растянуть), PiP, качество. Плавающее окно — кнопкой «Окно» под видео.
         Row(
             Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -470,7 +509,6 @@ private fun Controls(
                 ControlIcon(TubeIcons.ChevronDown, tr("Свернуть", "Minimize"), onClick = onMinimize)
             }
             Spacer(Modifier.weight(1f))
-            ControlIcon(TubeIcons.Popup, tr("Плавающее окно", "Floating window"), onClick = onPopup)
             ControlIcon(TubeIcons.Pip, tr("Картинка в картинке", "Picture-in-picture"), onClick = onPip)
             ControlIcon(TubeIcons.Gear, tr("Качество", "Quality")) { onToggle(); onQuality() }
         }

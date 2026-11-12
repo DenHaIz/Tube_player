@@ -384,7 +384,7 @@ class ScreenshotTest {
     @Test
     fun settingsSheetExpanded() {
         render(dark = true, amoled = true, sheet = Sheet.Settings)
-        compose.onNodeWithText("Аккаунт").performClick()
+        compose.onNodeWithText("Воспроизведение").performClick()
         compose.onNodeWithText("Вид").performClick()
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(1000)

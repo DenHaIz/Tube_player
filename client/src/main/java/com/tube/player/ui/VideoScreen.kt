@@ -7,6 +7,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import com.tube.ui.theme.Shapes
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
@@ -84,6 +86,8 @@ class VideoActions(
     val onLike: () -> Unit = {},
     val onDislike: () -> Unit = {},
     val onComments: () -> Unit = {},
+    /** Где плеер в окне (px) — системе для перехода в PiP: анимируется само видео, а не весь экран. */
+    val onPlayerBounds: (android.graphics.Rect) -> Unit = {},
 )
 
 /**
@@ -115,7 +119,7 @@ fun VideoScreen(
         onPip = actions.onPip, onBackground = actions.onBackground, onShare = actions.onShare, onSkip = actions.onSkip,
         onUndoSkip = actions.onUndoSkip, onRetry = actions.onRetry, onOpen = actions.onOpen, onChannel = actions.onChannel,
         onSubscribe = actions.onSubscribe, onSeekTo = actions.onSeekTo, onLike = actions.onLike, onDislike = actions.onDislike,
-        onComments = { commentsOpen = true },
+        onComments = { commentsOpen = true }, onPlayerBounds = actions.onPlayerBounds,
     )
     var offset by remember { mutableFloatStateOf(0f) }
     var settling by remember { mutableStateOf(false) }
@@ -189,7 +193,11 @@ fun VideoScreen(
                 player, state, settings, fullscreen = fullscreen,
                 onFullscreen = actions.onFullscreen, onMinimize = actions.onMinimize, onQuality = actions.onQuality,
                 onPopup = actions.onPopup, onPip = actions.onPip, onSkip = actions.onSkip, onUndoSkip = actions.onUndoSkip,
-                onRetry = actions.onRetry, modifier = m,
+                onRetry = actions.onRetry,
+                modifier = m.onGloballyPositioned { c ->
+                    val r = c.boundsInWindow()
+                    if (r.width > 0 && r.height > 0) actions.onPlayerBounds(android.graphics.Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt()))
+                },
                 // Во весь экран страница не сдвигается — свайп вниз просто выходит из него.
                 onSwipe = { dy -> if (!fullscreen && !settling) offset = dy.coerceAtLeast(0f) },
                 onSwipeEnd = swipeEnd,

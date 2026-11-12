@@ -105,11 +105,11 @@ fun SettingsSheet(
     onBypass: () -> Unit,
     onUpdates: () -> Unit = {},
 ) {
-    // Все разделы свёрнуты в «шторки»: лист открывается коротким списком, нужный раздел раскрывается по нажатию.
+    // Аккаунт и обход видны всегда; остальные разделы свёрнуты в «шторки» и раскрываются по нажатию.
     Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SheetTitle(tr("Настройки", "Settings"), "Tube Player ${BuildConfig.VERSION_NAME}")
 
-        SettingsShutter(tr("Аккаунт", "Account")) {
+        SettingsShutter(tr("Аккаунт", "Account"), collapsible = false) {
             // Профиль — по центру под названием раздела.
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (account != null) {
@@ -125,7 +125,7 @@ fun SettingsSheet(
             }
         }
 
-        SettingsShutter(tr("Обход блокировок", "Unblocking")) {
+        SettingsShutter(tr("Обход блокировок", "Unblocking"), collapsible = false) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
                 Segmented(BypassMode.entries, s.bypass, { if (it == BypassMode.Auto) tr("Встроенный", "Built-in") else tr("Выключен", "Off") }, { m -> edit { setBypass(m) } })
                 Spacer(Modifier.height(8.dp))
@@ -525,11 +525,11 @@ fun SheetTitle(title: String, subtitle: String? = null) {
 
 /**
  * Раздел настроек в «шторке»: изначально свёрнут — видно только название по центру и стрелку;
- * по нажатию содержимое плавно раскрывается, стрелка поворачивается.
+ * по нажатию содержимое плавно раскрывается, стрелка поворачивается. [collapsible] = false — раздел открыт всегда.
  */
 @Composable
-private fun SettingsShutter(title: String, content: @Composable () -> Unit) {
-    var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
+private fun SettingsShutter(title: String, collapsible: Boolean = true, content: @Composable () -> Unit) {
+    var expanded by remember { androidx.compose.runtime.mutableStateOf(!collapsible) }
     val colors = TubeTheme.colors
     val rotation by androidx.compose.animation.core.animateFloatAsState(if (expanded) 180f else 0f, Anim.move(), label = "shutter")
     val titleColor by androidx.compose.animation.animateColorAsState(if (expanded) colors.accent else colors.textPrimary, Anim.fade(), label = "shutterTitle")
@@ -541,7 +541,7 @@ private fun SettingsShutter(title: String, content: @Composable () -> Unit) {
         androidx.compose.foundation.layout.Box(
             Modifier
                 .fillMaxWidth()
-                .bouncyClickable(pressedScale = 0.99f) { expanded = !expanded }
+                .then(if (collapsible) Modifier.bouncyClickable(pressedScale = 0.99f) { expanded = !expanded } else Modifier)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -554,10 +554,12 @@ private fun SettingsShutter(title: String, content: @Composable () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 28.dp),
             )
-            androidx.compose.material3.Icon(
-                TubeIcons.ChevronDown, null, tint = colors.textSecondary,
-                modifier = Modifier.align(Alignment.CenterEnd).size(20.dp).graphicsLayer { rotationZ = rotation },
-            )
+            if (collapsible) {
+                androidx.compose.material3.Icon(
+                    TubeIcons.ChevronDown, null, tint = colors.textSecondary,
+                    modifier = Modifier.align(Alignment.CenterEnd).size(20.dp).graphicsLayer { rotationZ = rotation },
+                )
+            }
         }
         androidx.compose.animation.AnimatedVisibility(
             expanded,

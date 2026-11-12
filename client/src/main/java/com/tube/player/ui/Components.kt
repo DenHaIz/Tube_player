@@ -267,7 +267,8 @@ fun FeedGrid(
     empty: String? = null,
     header: (LazyGridScope.() -> Unit)? = null,
 ) {
-    val items = if (hideShorts) state.items.filter { it !is VideoItem || !it.short } else state.items
+    // Фильтр — только когда меняется лента, а не при каждой перекомпоновке (прокрутка, подгрузка).
+    val items = remember(state.items, hideShorts) { if (hideShorts) state.items.filter { it !is VideoItem || !it.short } else state.items }
     val nearEnd by remember(gridState) {
         derivedStateOf {
             val info = gridState.layoutInfo

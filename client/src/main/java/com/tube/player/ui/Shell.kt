@@ -98,6 +98,8 @@ class ShellActions(
     val installUpdate: (java.io.File) -> Unit = {},
     /** Системный выбор аккаунта Google телефона; в колбэк — адрес (null — отказались или аккаунтов нет). */
     val chooseAccount: ((String?) -> Unit) -> Unit = { it(null) },
+    /** Положение плеера в окне — подсказка системе для анимации входа в PiP. */
+    val playerBounds: (android.graphics.Rect) -> Unit = {},
 )
 
 private val TopBarHeight = 56.dp
@@ -263,6 +265,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         onSeekTo = { playback.player.seekTo(it) },
                         onLike = { (state.details?.item ?: state.item)?.let(vm::like) },
                         onDislike = { (state.details?.item ?: state.item)?.let(vm::dislike) },
+                        onPlayerBounds = actions.playerBounds,
                     ),
                     hideShorts = hideShorts,
                     comments = state.item?.url?.takeIf { it.isNotEmpty() }?.let { vm.comments(it) },
@@ -592,9 +595,13 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
                         modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                     )
                     // Полоса просмотренного — 2dp под мини-плеером.
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(colors.chip)) {
+                    // Позиция читается при рисовании — полоса обновляется без перекомпоновки мини-плеера.
+                    val track = colors.chip
+                    val accent = colors.accent
+                    Canvas(Modifier.fillMaxWidth().height(2.dp)) {
+                        drawRect(track)
                         val f = if (progress.duration > 0) progress.position.toFloat() / progress.duration else 0f
-                        Box(Modifier.fillMaxWidth(f.coerceIn(0f, 1f)).height(2.dp).background(colors.accent))
+                        drawRect(accent, size = androidx.compose.ui.geometry.Size(size.width * f.coerceIn(0f, 1f), size.height))
                     }
                 }
             }

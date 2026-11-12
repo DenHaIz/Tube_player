@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                     callback(null)
                 }
             },
+            playerBounds = ::onPlayerBounds,
             installUpdate = { apk ->
                 val updates = container.updates
                 // Android 8+: сначала разрешить установку из этого приложения, затем — системный установщик.
@@ -123,7 +124,12 @@ class MainActivity : ComponentActivity() {
             }
             // PiP включается сам при выходе на рабочий стол, пока открыто играющее видео.
             LaunchedEffect(Unit) {
-                snapshotFlow { vm.playerExpanded }.collect { updatePipParams() }
+                snapshotFlow { vm.playerExpanded }.collect { expanded ->
+                    updatePipParams()
+                    // Под открытым видео фон окна — чёрный: при уходе в PiP жестом система показывает окно
+                    // до того, как нарисуется видео, и светлый фон темы выглядел «белым экраном».
+                    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(if (expanded) android.graphics.Color.BLACK else getColor(R.color.window_background)))
+                }
             }
             CompositionLocalProvider(LocalLanguage provides s.language) {
                 TubeTheme(darkTheme = dark, dynamic = s.dynamicColors, amoled = s.amoled, palette = TubePalette.Violet) {
@@ -180,11 +186,24 @@ class MainActivity : ComponentActivity() {
             PendingIntent.getBroadcast(this, 1, Intent(ACTION_PIP_TOGGLE).setPackage(packageName), PendingIntent.FLAG_IMMUTABLE),
         )
         val builder = PictureInPictureParams.Builder().setAspectRatio(clamped).setActions(listOf(action))
+        // Окно PiP вырастает из самого плеера, а не из всего экрана.
+        playerRect?.takeIf { videoOpen }?.let { builder.setSourceRectHint(it) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setAutoEnterEnabled(videoOpen && container.settings.value?.autoPip != false)
             builder.setSeamlessResizeEnabled(true)
         }
         return builder.build()
+    }
+
+    private var playerRect: android.graphics.Rect? = null
+    private val pipUpdate = Runnable { updatePipParams() }
+
+    /** Плеер сдвинулся (прокрутка, свайп, поворот): параметры PiP — не чаще раза в 150 мс. */
+    private fun onPlayerBounds(rect: android.graphics.Rect) {
+        if (rect == playerRect) return
+        playerRect = rect
+        window.decorView.removeCallbacks(pipUpdate)
+        window.decorView.postDelayed(pipUpdate, 150)
     }
 
     private fun updatePipParams() {

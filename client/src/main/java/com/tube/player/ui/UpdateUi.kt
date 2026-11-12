@@ -58,7 +58,13 @@ val UpdateState.release: Release?
 /** Короткая полоса «Доступна версия X» над лентой; по нажатию — лист с подробностями. */
 @Composable
 fun UpdateBanner(state: UpdateState, onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    val release = state.release ?: return
+    AnimatedVisibility(state.release != null, enter = expandVertically(Anim.move()) + fadeIn(Anim.fade()), exit = shrinkVertically(Anim.move()) + fadeOut(Anim.out())) {
+        state.release?.let { UpdateBannerRow(state, it, onOpen, modifier) }
+    }
+}
+
+@Composable
+private fun UpdateBannerRow(state: UpdateState, release: Release, onOpen: () -> Unit, modifier: Modifier) {
     val colors = TubeTheme.colors
     Row(
         modifier

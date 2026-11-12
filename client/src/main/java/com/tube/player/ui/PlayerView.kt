@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -145,8 +146,8 @@ fun PlayerView(
     initiallyVisible: Boolean = false,
     /** Палец тянет плеер по вертикали: смещение от начала жеста (px). */
     onSwipe: (Float) -> Unit = {},
-    /** Палец отпущен: итоговое смещение (px); решение — свернуть, во весь экран или вернуть — за страницей. */
-    onSwipeEnd: (Float) -> Unit = {},
+    /** Палец отпущен: итоговое смещение и скорость (px, px/с); решение — свернуть, во весь экран или вернуть — за страницей. */
+    onSwipeEnd: (Float, Float) -> Unit = { _, _ -> },
 ) {
     val progress = rememberProgress(player)
     var controls by remember { mutableStateOf(initiallyVisible) }
@@ -185,6 +186,7 @@ fun PlayerView(
     LaunchedEffect(fullscreen) { if (!fullscreen) fill = false }
     // Масштаб видео: 1 — вписано целиком, [fillScale] — заполняет экран (края обрезаются).
     val zoom = remember { androidx.compose.animation.core.Animatable(1f) }
+    var gestureCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
     var pinching by remember { mutableStateOf(false) }
 
     fun seek(side: Int) {
@@ -236,9 +238,17 @@ fun PlayerView(
                         onDoubleTap = { offset -> seek(if (offset.x > width / 2) 1 else -1) },
                     )
                 }
+                .onGloballyPositioned { gestureCoords = it }
                 .pointerInput(fullscreen) {
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        // Положение пальца — в координатах окна: плеер сам едет вместе со страницей, и в его
+                        // собственных координатах палец «стоял бы на месте» — отсюда были рывки.
+                        fun windowY(change: androidx.compose.ui.input.pointer.PointerInputChange): Float =
+                            gestureCoords?.takeIf { it.isAttached }?.localToWindow(change.position)?.y ?: change.position.y
+                        val startY = windowY(down)
+                        val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                        var swipeY = 0f
                         var pan = Offset.Zero
                         var pinchZoom = 1f
                         var vertical = false
@@ -257,10 +267,14 @@ fun PlayerView(
                                 }
                             } else if (!pinch) {
                                 pan += event.calculatePan()
+                                val change = event.changes.first()
+                                val y = windowY(change)
+                                tracker.addPosition(change.uptimeMillis, Offset(0f, y))
                                 if (!vertical && abs(pan.y) > viewConfiguration.touchSlop && abs(pan.y) > abs(pan.x) * 1.5f) vertical = true
                                 if (vertical) {
                                     event.changes.forEach { it.consume() }
-                                    onSwipe(pan.y)
+                                    swipeY = y - startY
+                                    onSwipe(swipeY)
                                 }
                             }
                         } while (event.changes.any { it.pressed })
@@ -273,7 +287,7 @@ fun PlayerView(
                                 fill = false
                                 hint = lang.pick("Исходный размер", "Original size")
                             }
-                            vertical -> onSwipeEnd(pan.y)
+                            vertical -> onSwipeEnd(swipeY, tracker.calculateVelocity().y)
                         }
                         // После щипка масштаб плавно доезжает до выбранного состояния.
                         pinching = false
@@ -281,8 +295,13 @@ fun PlayerView(
                 },
         )
 
-        if (progress.buffering || (state.loading && state.error == null)) {
-            CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.align(Alignment.Center).size(44.dp))
+        AnimatedVisibility(
+            progress.buffering || (state.loading && state.error == null),
+            Modifier.align(Alignment.Center),
+            enter = fadeIn(Anim.fade()),
+            exit = fadeOut(Anim.out()),
+        ) {
+            CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(44.dp))
         }
 
         // Перемотка: полукруглая подсветка на стороне тапа, стрелки и сумма секунд.
@@ -362,9 +381,10 @@ fun PlayerView(
             }
         }
 
-        state.error?.let { error ->
+        AnimatedVisibility(state.error != null, Modifier.align(Alignment.Center), enter = fadeIn(Anim.fade()), exit = fadeOut(Anim.out())) {
+            val error = state.error.orEmpty()
             Column(
-                Modifier.align(Alignment.Center).padding(16.dp),
+                Modifier.padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {

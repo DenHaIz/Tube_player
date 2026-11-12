@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -208,10 +209,10 @@ fun CommentsPanel(model: CommentsModel, onClose: () -> Unit, modifier: Modifier 
                 }
                 model.items.isEmpty() -> item { Message(tr("Комментариев пока нет", "No comments yet"), null, null, null) }
                 else -> {
-                    model.items.forEach { comment ->
+                    model.items.forEachIndexed { index, comment ->
                         item(key = comment.id) {
                             Column(Modifier.animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())) {
-                                CommentRow(comment, reply = false, onReplies = { model.toggleReplies(comment) }, repliesShown = model.replies.containsKey(comment.id), repliesLoading = model.repliesLoading[comment.id] == true)
+                                CommentRow(comment, reply = false, onReplies = { model.toggleReplies(comment) }, repliesShown = model.replies.containsKey(comment.id), repliesLoading = model.repliesLoading[comment.id] == true, divider = index > 0)
                             }
                         }
                         model.replies[comment.id]?.forEach { reply ->
@@ -229,9 +230,12 @@ fun CommentsPanel(model: CommentsModel, onClose: () -> Unit, modifier: Modifier 
     }
 }
 
-/** Комментарий как в YouTube: аватар слева, «@автор · 2 дня назад», текст (нажатие раскрывает), лайки и ответы. */
+/**
+ * Комментарий как в YouTube: аватар слева, имя автора (выделено) и время, текст (нажатие раскрывает), лайки и ответы.
+ * Между комментариями — тонкий разделитель, ответы сдвинуты и отмечены линией слева, — чтобы авторы не сливались.
+ */
 @Composable
-private fun CommentRow(comment: Comment, reply: Boolean, onReplies: () -> Unit, repliesShown: Boolean, repliesLoading: Boolean) {
+private fun CommentRow(comment: Comment, reply: Boolean, onReplies: () -> Unit, repliesShown: Boolean, repliesLoading: Boolean, divider: Boolean = false) {
     val colors = TubeTheme.colors
     val lang = LocalLanguage.current
     var expanded by remember { mutableStateOf(false) }
@@ -239,55 +243,79 @@ private fun CommentRow(comment: Comment, reply: Boolean, onReplies: () -> Unit, 
     val text = remember(comment.text, comment.html) {
         if (comment.html) AnnotatedString.fromHtml(comment.text, linkStyles = TextLinkStyles(SpanStyle(color = accent))) else AnnotatedString(comment.text)
     }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .bouncyClickable(pressedScale = 0.995f) { expanded = !expanded }
-            .padding(start = if (reply) 56.dp else 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp),
-    ) {
-        Avatar(comment.avatar, if (reply) 24.dp else 32.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f).animateContentSize(Anim.move())) {
-            if (comment.pinned) {
-                Text(tr("Закреплено автором", "Pinned by creator"), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+    Column(Modifier.fillMaxWidth()) {
+        if (!reply && divider) Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(colors.chip))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .bouncyClickable(pressedScale = 0.995f) { expanded = !expanded }
+                .padding(start = if (reply) 40.dp else 16.dp, end = 16.dp, top = if (reply) 10.dp else 16.dp, bottom = if (reply) 6.dp else 12.dp),
+        ) {
+            if (reply) {
+                // Линия ветки ответов.
+                Box(Modifier.padding(end = 12.dp).width(2.dp).height(40.dp).background(colors.accent.copy(alpha = 0.35f), RoundedCornerShape(1.dp)))
             }
-            Text(
-                Format.meta(comment.author, comment.date?.let { Format.relative(it, comment.dateAt, lang) }),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (comment.byOwner) accent else colors.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = colors.textPrimary,
-                maxLines = if (expanded) Int.MAX_VALUE else 4,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(TubeIcons.ThumbUp, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
-                if (comment.likes > 0) Text(comment.likesText ?: Format.compact(comment.likes.toLong(), lang), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
-                if (comment.hearted) {
-                    Spacer(Modifier.width(6.dp))
-                    Text("♥", style = MaterialTheme.typography.bodyMedium, color = colors.danger)
+            Avatar(comment.avatar, if (reply) 26.dp else 36.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f).animateContentSize(Anim.move())) {
+                if (comment.pinned) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 2.dp)) {
+                        Text("📌", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.width(4.dp))
+                        Text(tr("Закреплено автором", "Pinned by creator"), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+                    }
                 }
-            }
-            if (!reply && comment.replies > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        comment.author,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .then(if (comment.byOwner) Modifier.background(colors.chip, RoundedCornerShape(10.dp)).padding(horizontal = 8.dp, vertical = 1.dp) else Modifier),
+                    )
+                    comment.date?.let {
+                        Spacer(Modifier.width(8.dp))
+                        Text(Format.relative(it, comment.dateAt, lang), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary, maxLines = 1)
+                    }
+                }
                 Text(
-                    when {
-                        repliesLoading -> tr("Загрузка…", "Loading…")
-                        repliesShown -> tr("Скрыть ответы", "Hide replies")
-                        else -> lang.pick(
-                            "${comment.replies} " + lang.plural(comment.replies, "ответ", "ответа", "ответов", "reply", "replies"),
-                            "${comment.replies} " + lang.plural(comment.replies, "ответ", "ответа", "ответов", "reply", "replies"),
-                        )
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    color = accent,
-                    modifier = Modifier.padding(top = 4.dp).bouncyClickable(pressedScale = 0.95f, onClick = onReplies).padding(vertical = 6.dp),
+                    text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = colors.textPrimary,
+                    maxLines = if (expanded) Int.MAX_VALUE else 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
+                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(TubeIcons.ThumbUp, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
+                    if (comment.likes > 0) Text(comment.likesText ?: Format.compact(comment.likes.toLong(), lang), style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
+                    if (comment.hearted) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("♥", style = MaterialTheme.typography.bodyMedium, color = colors.danger)
+                    }
+                }
+                if (!reply && comment.replies > 0) {
+                    Row(
+                        Modifier.padding(top = 6.dp).bouncyClickable(pressedScale = 0.95f, onClick = onReplies).padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val rotation by androidx.compose.animation.core.animateFloatAsState(if (repliesShown) 180f else 0f, Anim.move(), label = "replies")
+                        Icon(TubeIcons.ChevronDown, null, tint = accent, modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = rotation })
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            when {
+                                repliesLoading -> tr("Загрузка…", "Loading…")
+                                repliesShown -> tr("Скрыть ответы", "Hide replies")
+                                else -> "${comment.replies} " + lang.plural(comment.replies, "ответ", "ответа", "ответов", "reply", "replies")
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            color = accent,
+                        )
+                    }
+                }
             }
         }
     }

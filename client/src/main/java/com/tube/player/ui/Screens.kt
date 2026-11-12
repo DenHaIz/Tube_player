@@ -128,7 +128,12 @@ fun SearchScreen(
             items(words.size, key = { words[it] }) { i ->
                 val word = words[i]
                 Row(
-                    Modifier.fillMaxWidth().bouncyClickable(pressedScale = 0.99f) { onSearch(word) }.padding(start = 16.dp, end = 4.dp).height(52.dp),
+                    Modifier
+                        .animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())
+                        .fillMaxWidth()
+                        .bouncyClickable(pressedScale = 0.99f) { onSearch(word) }
+                        .padding(start = 16.dp, end = 4.dp)
+                        .height(52.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(if (suggestions.isEmpty()) TubeIcons.History else TubeIcons.Search, null, tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(24.dp))

@@ -274,6 +274,38 @@ class ScreenshotTest {
     }
 
     @Test
+    fun commentsPanel() {
+        val comments = listOf(
+            com.tube.player.youtube.Comment("1", "@nauka_prosto", avatar = "https://yt3/a1", text = "Спасибо всем, кто смотрит! Следующий выпуск — про спутниковый интернет.", likes = 1240, date = "2 дня назад", pinned = true, byOwner = true, hearted = true),
+            com.tube.player.youtube.Comment("2", "@ivan", avatar = "https://yt3/a2", text = "Наконец-то понятно объяснили, как работает DNS. Лайк!", likes = 312, date = "1 день назад", replies = 4),
+            com.tube.player.youtube.Comment("3", "@maria_k", avatar = "https://yt3/a3", text = "А можно отдельное видео про TLS 1.3 и почему его так сложно заблокировать?", likes = 87, date = "20 часов назад", replies = 1),
+            com.tube.player.youtube.Comment("4", "@techfan", avatar = "https://yt3/a4", text = "Кабели на дне океана — это вообще магия.", likes = 15, date = "5 часов назад"),
+        )
+        val v = videos().first()
+        val model = CommentsModelHolder.preview(app, comments)
+        compose.setContent {
+            CompositionLocalProvider(LocalLanguage provides AppLanguage.Russian) {
+                TubeTheme(darkTheme = false, palette = TubePalette.Violet) {
+                    com.tube.player.ui.VideoScreen(
+                        player = null,
+                        state = PlaybackState(item = v, details = VideoDetails(v, "Описание", false, 48_200, 1_840_000, emptyList(), emptyList())),
+                        settings = com.tube.player.data.PlayerSettings(),
+                        subscribed = false,
+                        fullscreen = false,
+                        actions = com.tube.player.ui.VideoActions({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}),
+                        hideShorts = false,
+                        comments = model,
+                        startWithComments = true,
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1000)
+        shot("comments_panel")
+    }
+
+    @Test
     fun channel() {
         render { vm ->
             val url = "https://www.youtube.com/channel/UC0"
@@ -401,4 +433,10 @@ class ScreenshotTest {
         performTouchInput { swipeUp(startY = bottom * 0.85f, endY = bottom * 0.2f) }
         compose.waitForIdle()
     }
+}
+
+/** Комментарии для скриншота: модель без сети. */
+private object CommentsModelHolder {
+    fun preview(app: PlayerApp, items: List<com.tube.player.youtube.Comment>) =
+        com.tube.player.ui.CommentsModel.preview(kotlinx.coroutines.MainScope(), app.container.repository, items, 1_250)
 }

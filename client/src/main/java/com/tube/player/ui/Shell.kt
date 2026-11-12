@@ -231,8 +231,8 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
             // Страница видео поверх всего — «выезжает» снизу, как в YouTube.
             AnimatedVisibility(
                 vm.playerExpanded && state.item != null,
-                enter = slideInVertically(Anim.move()) { it / 2 } + fadeIn(Anim.fade()),
-                exit = slideOutVertically(Anim.move()) { it / 2 } + fadeOut(Anim.out()),
+                enter = slideInVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 450f)) { it } + fadeIn(Anim.fade()),
+                exit = slideOutVertically(androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 450f)) { it } + fadeOut(Anim.out()),
             ) {
                 val subscribed = subscriptions.any { s -> state.item?.channelUrl?.let { com.tube.player.data.Library.sameChannel(s.channel.url, it) } == true }
                 VideoScreen(
@@ -386,19 +386,37 @@ private fun TopBar(
             Modifier.fillMaxWidth().height(TopBarHeight).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (canGoBack) {
-                BarIcon(TubeIcons.Back, tr("Назад", "Back"), onBack)
-            } else {
-                Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Logo(24.dp)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Tube Player", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp), color = colors.textPrimary, maxLines = 1)
+            AnimatedContent(
+                canGoBack,
+                transitionSpec = { fadeIn(Anim.fade()) togetherWith fadeOut(Anim.out()) },
+                label = "barStart",
+            ) { back ->
+                if (back) {
+                    BarIcon(TubeIcons.Back, tr("Назад", "Back"), onBack)
+                } else {
+                    Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Logo(24.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Tube Player", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp), color = colors.textPrimary, maxLines = 1)
+                    }
                 }
             }
-            if (searching) {
+            AnimatedContent(
+                searching,
+                modifier = Modifier.weight(1f),
+                transitionSpec = {
+                    (fadeIn(Anim.fade()) + slideInHorizontally(Anim.move()) { it / 8 }) togetherWith
+                        (fadeOut(Anim.out()) + slideOutHorizontally(Anim.move()) { -it / 8 })
+                },
+                contentAlignment = Alignment.CenterEnd,
+                label = "barEnd",
+            ) { searchingNow ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (searchingNow) {
                 Row(
                     Modifier
                         .weight(1f)
+                        .padding(start = 4.dp)
                         .height(40.dp)
                         .background(colors.chip, Shapes.Pill)
                         .padding(horizontal = 16.dp),
@@ -455,6 +473,8 @@ private fun TopBar(
                     if (account?.avatar != null) Avatar(account.avatar, 28.dp)
                     else Icon(TubeIcons.Gear, tr("Настройки", "Settings"), tint = colors.textPrimary, modifier = Modifier.size(24.dp))
                 }
+            }
+            }
             }
         }
     }

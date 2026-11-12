@@ -103,9 +103,10 @@ fun VideoScreen(
     hideShorts: Boolean,
     modifier: Modifier = Modifier,
     comments: CommentsModel? = null,
+    startWithComments: Boolean = false,
 ) {
     // Панель комментариев выезжает под плеером; «назад» сначала закрывает её.
-    var commentsOpen by remember { mutableStateOf(false) }
+    var commentsOpen by remember { mutableStateOf(startWithComments) }
     androidx.activity.compose.BackHandler(enabled = commentsOpen) { commentsOpen = false }
     val withComments = VideoActions(
         onMinimize = actions.onMinimize, onFullscreen = actions.onFullscreen, onQuality = actions.onQuality, onPopup = actions.onPopup,
@@ -137,26 +138,29 @@ fun VideoScreen(
         val wide = maxWidth >= 900.dp && landscape
         val height = constraints.maxHeight.toFloat()
         val threshold = with(density) { 96.dp.toPx() }
-        val swipeEnd: (Float) -> Unit = { total ->
+        val fling = with(density) { 900.dp.toPx() }
+        val swipeEnd: (Float, Float) -> Unit = { total, velocity ->
             if (!settling) {
                 scope.launch {
                     settling = true
+                    val down = total > threshold || (velocity > fling && total > threshold / 4)
+                    val up = total < -threshold || (velocity < -fling && total < -threshold / 4)
                     when {
-                        fullscreen && total > threshold -> {
-                            actions.onFullscreen(false)
-                            androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
-                        }
-                        !fullscreen && total > threshold -> {
-                            // Доезжает вниз сам (быстро и плавно), затем страница становится мини-плеером.
-                            androidx.compose.animation.core.animate(offset, height, animationSpec = androidx.compose.animation.core.tween(180)) { v, _ -> offset = v }
+                        fullscreen && down -> actions.onFullscreen(false)
+                        !fullscreen && down -> {
+                            // Продолжает движение пальца (с его скоростью) до низа экрана и становится мини-плеером.
+                            // Смещение не сбрасывается: страница уже за экраном и просто исчезает — без отката и задержки.
+                            androidx.compose.animation.core.animate(
+                                offset, height, initialVelocity = velocity.coerceAtLeast(0f),
+                                animationSpec = androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 500f, visibilityThreshold = 1f),
+                            ) { v, _ -> offset = v }
                             actions.onMinimize()
-                            offset = 0f
                         }
-                        !fullscreen && total < -threshold -> {
-                            offset = 0f
-                            actions.onFullscreen(true)
-                        }
-                        else -> androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
+                        !fullscreen && up -> actions.onFullscreen(true)
+                        else -> androidx.compose.animation.core.animate(
+                            offset, 0f, initialVelocity = velocity,
+                            animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.85f, stiffness = 500f),
+                        ) { v, _ -> offset = v }
                     }
                     settling = false
                 }

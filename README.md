@@ -2,7 +2,7 @@
 
 Два Android-приложения для YouTube в России — по принципу ByeDPI / zapret, без внешних серверов.
 
-- **Tube Player** (`client`) — свой лёгкий клиент YouTube со встроенным обходом DPI: VPN не нужен, работает рядом с любым VPN. Без рекламы, SponsorBlock, дизлайки, фон, PiP и плавающее окно, выбор качества, AMOLED-тема, история и подписки без аккаунта; вход в Google — по желанию. Релизы: https://github.com/DenHaIz/Tube_player/releases
+- **Tube Player** (`client`) — свой лёгкий клиент YouTube со встроенным обходом DPI: VPN не нужен, работает рядом с любым VPN. Интерфейс и жесты как в YouTube, без рекламы, SponsorBlock, дизлайки, комментарии, лайки, фон, PiP, плавающее окно и мини-плеер с видео, выбор качества и скорости, HD-превью, AMOLED-тема, история и подписки без аккаунта; вход в Google — по желанию; самообновление с GitHub и зеркал. Релизы: https://github.com/DenHaIz/Tube_player/releases
 - **Tube** (`app`) — локальный VPN, который пускает через обход только выбранные приложения (YouTube, ReVanced, Morphe). Релизы: https://github.com/DenHaIz/Tube_DPI/releases
 
 ## Tube
@@ -27,6 +27,7 @@ YouTube / ReVanced / Morphe ─► TUN (VpnService, только выбранн�
 | `core-byedpi` | byedpi (submodule) → исполняемый `libbyedpi.so`; `ByeDpiProcess`, `StrategyArgs`, `Strategies`, `StrategyTester` |
 | `core-tunnel` | hev-socks5-tunnel (submodule, ndk-build) + JNI `TProxyService`, `TunnelConfig` |
 | `core-strategy` | подбор стратегии, сторож, результаты по сетям — общие для обоих приложений |
+| `core-update` | обновления из релизов GitHub и зеркал с проверкой SHA-256 и подписи — общие для обоих приложений |
 | `core-ui` | тема, стекло, компоненты (порт из Woody) |
 | `app` | Tube: VPN-сервис, автозапуск, плитка, экраны |
 | `client` | Tube Player: NewPipeExtractor, Media3 (DASH), OkHttp через встроенный byedpi, SponsorBlock, вход в Google |

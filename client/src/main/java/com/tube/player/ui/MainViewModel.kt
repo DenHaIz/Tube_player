@@ -223,8 +223,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         playerExpanded = false
     }
 
+    /** Повторное нажатие на открытую вкладку: её лента прокручивается наверх и обновляется. */
+    var reselect by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+
     fun selectTab(t: Tab) {
-        if (tab == t && stack.isEmpty()) return
+        if (tab == t && stack.isEmpty()) {
+            reselect++
+            return
+        }
         tab = t
         stack.clear()
     }

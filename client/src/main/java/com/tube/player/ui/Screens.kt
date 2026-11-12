@@ -66,6 +66,7 @@ fun HomeScreen(
     onRetry: () -> Unit,
     padding: PaddingValues,
     hideShorts: Boolean,
+    reselect: Int = 0,
     banner: @Composable () -> Unit = {},
 ) {
     FeedGrid(
@@ -73,6 +74,7 @@ fun HomeScreen(
         contentPadding = gridPadding(padding),
         hideShorts = hideShorts,
         empty = tr("Здесь пока пусто", "Nothing here yet"),
+        reselect = reselect,
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) { banner() }
         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -161,6 +163,7 @@ fun SubscriptionsScreen(
     onSignIn: () -> Unit,
     padding: PaddingValues,
     hideShorts: Boolean,
+    reselect: Int = 0,
 ) {
     if (subscriptions.isEmpty() && !signedIn) {
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -175,7 +178,7 @@ fun SubscriptionsScreen(
         }
         return
     }
-    FeedGrid(state, onOpen, {}, onRetry, gridPadding(padding), hideShorts = hideShorts, empty = tr("Новых видео нет", "No new videos")) {
+    FeedGrid(state, onOpen, {}, onRetry, gridPadding(padding), hideShorts = hideShorts, empty = tr("Новых видео нет", "No new videos"), reselect = reselect) {
         if (subscriptions.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 androidx.compose.foundation.lazy.LazyRow(

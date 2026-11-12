@@ -191,7 +191,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         Tab.Home -> {
                             val feed = vm.homeFeed(vm.section)
                             LaunchedEffect(vm.section) { feed.ensure() }
-                            HomeScreen(vm.section, feed.state, { vm.section = it }, vm::open, feed::loadMore, feed::refresh, padding, hideShorts) {
+                            HomeScreen(vm.section, feed.state, { vm.section = it }, vm::open, feed::loadMore, feed::refresh, padding, hideShorts, reselect = vm.reselect) {
                                 UpdateBanner(update, onOpen = { sheet = Sheet.Update })
                             }
                         }
@@ -201,6 +201,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                                 subscriptions, vm.subscriptionsFeed.state, account != null,
                                 onChannel = { vm.open(it) }, onOpen = vm::open, onRetry = vm.subscriptionsFeed::refresh,
                                 onSignIn = { sheet = Sheet.Account }, padding = padding, hideShorts = hideShorts,
+                                reselect = vm.reselect,
                             )
                         }
                         Tab.Library -> LibraryScreen(history, vm::open, { container.library.removeHistory(it) }, { container.library.clearHistory() }, padding, liked)

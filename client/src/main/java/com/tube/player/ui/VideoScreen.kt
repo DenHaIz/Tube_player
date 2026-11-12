@@ -134,8 +134,11 @@ fun VideoScreen(
             androidx.compose.animation.core.animate(offset, 0f, animationSpec = Anim.move()) { v, _ -> offset = v }
         }
     }
+    // Перемещаемый плеер создаётся один раз на страницу (здесь, а не в ветках раскладки: remember в каждой ветке
+    // давал свой экземпляр — плеер пересоздавался, и при входе/выходе из полноэкранного режима мелькала обложка).
+    val movable = rememberMovablePlayer()
     // Во весь экран фон плавно темнеет — плеер растёт на чёрном, без светлых краёв по пути.
-    val pageBackground by androidx.compose.animation.animateColorAsState(if (fullscreen) Color.Black else TubeTheme.colors.background, Anim.fade(), label = "pageBg")
+    val pageBackground by androidx.compose.animation.animateColorAsState(if (fullscreen) Color.Black else TubeTheme.colors.background, androidx.compose.animation.core.tween(PlayerMoveMs, easing = PlayerMoveEasing), label = "pageBg")
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -210,7 +213,7 @@ fun VideoScreen(
         )
         androidx.compose.ui.layout.LookaheadScope {
             val lookahead = this
-            val playerBox: @Composable (Modifier) -> Unit = { m -> movablePlayer(m, slot, lookahead) }
+            val playerBox: @Composable (Modifier) -> Unit = { m -> movable(m, slot, lookahead) }
             when {
                 fullscreen || (landscape && !wide) -> playerBox(Modifier.fillMaxSize())
                 wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -274,17 +277,19 @@ private class PlayerSlot(
     val corner: androidx.compose.ui.unit.Dp,
 )
 
-/** Плавное изменение границ плеера: без перелёта, ~0,35 с. */
+/** Переход плеера в полноэкранный режим и обратно: 0,45 с, мягкий разгон и долгое плавное торможение. */
+private const val PlayerMoveMs = 450
+private val PlayerMoveEasing = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0f, 0f, 1f)
 private val PlayerBounds = androidx.compose.animation.BoundsTransform { _, _ ->
-    androidx.compose.animation.core.spring(dampingRatio = 1f, stiffness = 420f)
+    androidx.compose.animation.core.tween(PlayerMoveMs, easing = PlayerMoveEasing)
 }
 
+/** Один экземпляр плеера на страницу: переносится между раскладками со всем состоянием (TextureView, контролы, жесты). */
 @Composable
-private fun movablePlayer(modifier: Modifier, slot: PlayerSlot, lookahead: androidx.compose.ui.layout.LookaheadScope) {
-    // Один экземпляр на страницу: переносится между раскладками со всем состоянием (TextureView, контролы, жесты).
-    val content = remember {
+private fun rememberMovablePlayer(): @Composable (Modifier, PlayerSlot, androidx.compose.ui.layout.LookaheadScope) -> Unit =
+    remember {
         androidx.compose.runtime.movableContentOf { m: Modifier, s: PlayerSlot, scope: androidx.compose.ui.layout.LookaheadScope ->
-            val corner by androidx.compose.animation.core.animateDpAsState(s.corner, Anim.move(), label = "playerCorner")
+            val corner by androidx.compose.animation.core.animateDpAsState(s.corner, androidx.compose.animation.core.tween(PlayerMoveMs, easing = PlayerMoveEasing), label = "playerCorner")
             PlayerView(
                 s.player, s.state, s.settings, fullscreen = s.fullscreen,
                 onFullscreen = s.actions.onFullscreen, onMinimize = s.actions.onMinimize, onQuality = s.actions.onQuality,
@@ -303,13 +308,11 @@ private fun movablePlayer(modifier: Modifier, slot: PlayerSlot, lookahead: andro
             )
         }
     }
-    content(modifier, slot, lookahead)
-}
 
 /** Содержимое рядом с плеером мягко проявляется, когда раскладка сменилась (выход из полноэкранного режима). */
 private fun Modifier.fadeInOnAppear(): Modifier = composed {
     val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { alpha.animateTo(1f, androidx.compose.animation.core.tween(220, delayMillis = 60)) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { alpha.animateTo(1f, androidx.compose.animation.core.tween(320, delayMillis = 140)) }
     graphicsLayer { this.alpha = alpha.value }
 }
 

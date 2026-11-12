@@ -49,6 +49,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -265,6 +266,8 @@ fun FeedGrid(
     hideShorts: Boolean = false,
     gridState: LazyGridState = rememberLazyGridState(),
     empty: String? = null,
+    /** Растёт при повторном нажатии на уже открытую вкладку: лента прокручивается наверх и обновляется. */
+    reselect: Int = 0,
     header: (LazyGridScope.() -> Unit)? = null,
 ) {
     // Фильтр — только когда меняется лента, а не при каждой перекомпоновке (прокрутка, подгрузка).
@@ -277,35 +280,64 @@ fun FeedGrid(
         }
     }
     LaunchedEffect(nearEnd, state.items.size) { if (nearEnd) onMore() }
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        // Телефон: одна колонка, превью во всю ширину (как в приложении YouTube); шире — сетка карточек.
-        val phone = maxWidth < 600.dp
-        CompositionLocalProvider(
-            LocalThumbShape provides if (phone) RectangleShape else ThumbShape,
-            LocalCardInset provides if (phone) 12.dp else 0.dp,
-        ) {
-            LazyVerticalGrid(
-                columns = if (phone) GridCells.Fixed(1) else GridCells.Adaptive(GridMinCell),
-                state = gridState,
-                contentPadding = if (phone) edgeToEdge(contentPadding) else contentPadding,
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(if (phone) 12.dp else 20.dp),
-                modifier = Modifier.fillMaxSize(),
+    // Только новые нажатия: лента, созданная заново (смена вкладки), не обновляется из-за старых.
+    var handledReselect by remember { mutableIntStateOf(reselect) }
+    LaunchedEffect(reselect) {
+        if (reselect != handledReselect) {
+            handledReselect = reselect
+            gridState.animateScrollToItem(0)
+            onRetry()
+        }
+    }
+    // Потянуть вниз, когда лента уже в самом верху, — обновить (как в YouTube). Пока обновляется,
+    // старые карточки остаются на месте, сверху крутится индикатор.
+    val pull = androidx.compose.material3.pulltorefresh.rememberPullToRefreshState()
+    val refreshing = state.loading && items.isNotEmpty()
+    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRetry,
+        state = pull,
+        modifier = modifier.fillMaxSize(),
+        indicator = {
+            androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator(
+                state = pull,
+                isRefreshing = refreshing,
+                containerColor = TubeTheme.colors.background,
+                color = TubeTheme.colors.accent,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = contentPadding.calculateTopPadding()),
+            )
+        },
+    ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            // Телефон: одна колонка, превью во всю ширину (как в приложении YouTube); шире — сетка карточек.
+            val phone = maxWidth < 600.dp
+            CompositionLocalProvider(
+                LocalThumbShape provides if (phone) RectangleShape else ThumbShape,
+                LocalCardInset provides if (phone) 12.dp else 0.dp,
             ) {
-                header?.invoke(this)
-                when {
-                    state.loading && items.isEmpty() -> items(if (phone) 3 else 8, key = { "skeleton$it" }) { SkeletonCard(Modifier.animateItem()) }
-                    state.error != null && items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
-                        Message(tr("Не удалось загрузить", "Couldn't load"), state.error, tr("Повторить", "Retry"), onRetry)
-                    }
-                    items.isEmpty() && empty != null -> item(span = { GridItemSpan(maxLineSpan) }) { Message(empty, null, null, null) }
-                    else -> {
-                        items(items.size, key = { items[it].url }, contentType = { items[it]::class }) { i ->
-                            Box(Modifier.animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())) {
-                                FeedItemCard(items[i], onOpen)
-                            }
+                LazyVerticalGrid(
+                    columns = if (phone) GridCells.Fixed(1) else GridCells.Adaptive(GridMinCell),
+                    state = gridState,
+                    contentPadding = if (phone) edgeToEdge(contentPadding) else contentPadding,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (phone) 12.dp else 20.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    header?.invoke(this)
+                    when {
+                        state.loading && items.isEmpty() -> items(if (phone) 3 else 8, key = { "skeleton$it" }) { SkeletonCard(Modifier.animateItem()) }
+                        state.error != null && items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
+                            Message(tr("Не удалось загрузить", "Couldn't load"), state.error, tr("Повторить", "Retry"), onRetry)
                         }
-                        if (state.loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { Loading(Modifier.padding(16.dp)) }
+                        items.isEmpty() && empty != null -> item(span = { GridItemSpan(maxLineSpan) }) { Message(empty, null, null, null) }
+                        else -> {
+                            items(items.size, key = { items[it].url }, contentType = { items[it]::class }) { i ->
+                                Box(Modifier.animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())) {
+                                    FeedItemCard(items[i], onOpen)
+                                }
+                            }
+                            if (state.loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { Loading(Modifier.padding(16.dp)) }
+                        }
                     }
                 }
             }

@@ -83,6 +83,8 @@ class PopupPlayer(
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             playPause.setImageResource(if (isPlaying) R.drawable.popup_pause else R.drawable.popup_play)
+            // Пока в окне идёт видео, экран не гаснет.
+            root.keepScreenOn = isPlaying
         }
 
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) = fitAspect()

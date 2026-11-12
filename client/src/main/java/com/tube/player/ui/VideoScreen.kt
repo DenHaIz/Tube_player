@@ -509,7 +509,7 @@ fun MiniPlayer(
     ) {
         Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f).background(Color.Black)) {
             if (player != null && !state.popup) {
-                VideoSurface(player, aspect, Modifier.fillMaxSize(), placeholder = com.tube.player.youtube.thumbnailCandidates(item))
+                VideoSurface(player, aspect, Modifier.fillMaxSize(), placeholder = com.tube.player.youtube.thumbnailCandidates(item), keepScreenOn = playing)
             } else {
                 NetImage(com.tube.player.youtube.thumbnailCandidates(item), Modifier.fillMaxSize())
             }

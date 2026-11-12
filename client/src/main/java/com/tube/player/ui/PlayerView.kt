@@ -215,6 +215,7 @@ fun PlayerView(
                     progress.aspect,
                     Modifier.fillMaxSize().graphicsLayer { scaleX = zoom.value; scaleY = zoom.value },
                     placeholder = state.item?.let { com.tube.player.youtube.thumbnailCandidates(it) }.orEmpty(),
+                    keepScreenOn = progress.playing,
                 )
                 else -> NetImage(state.item?.let { com.tube.player.youtube.thumbnailCandidates(it) }.orEmpty(), Modifier.fillMaxSize(), ContentScale.Fit)
             }

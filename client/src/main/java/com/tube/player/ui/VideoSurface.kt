@@ -27,6 +27,7 @@ import androidx.media3.common.Player
  * и переключается со старой на новую сразу — без промежуточного «нет поверхности». Поэтому при переходе
  * страница видео → мини-плеер (и обратно) кадр не пропадает: старый вид держит последний кадр, новый
  * показывает видео с ближайшего кадра. Пока первого кадра нет — под видом обложка [placeholder].
+ * [keepScreenOn] — пока видео играет и видно, экран не гаснет (стандартный PlayerView делает это сам, свой вид — нет).
  */
 @Composable
 fun VideoSurface(
@@ -34,6 +35,7 @@ fun VideoSurface(
     aspect: Float,
     modifier: Modifier = Modifier,
     placeholder: List<String> = emptyList(),
+    keepScreenOn: Boolean = false,
 ) {
     var hasFrame by remember(player) { mutableStateOf(false) }
     val holder = remember(player) { SurfaceHolder(player) { hasFrame = true } }
@@ -46,6 +48,7 @@ fun VideoSurface(
         }
         AndroidView(
             factory = { context -> TextureView(context).apply { surfaceTextureListener = holder } },
+            update = { it.keepScreenOn = keepScreenOn },
             modifier = Modifier.aspectRatio(aspect.coerceIn(0.3f, 4f)),
         )
     }

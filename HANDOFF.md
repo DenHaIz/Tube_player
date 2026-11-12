@@ -4,15 +4,15 @@
 
 ## Что это
 
-Android-приложение для просмотра YouTube в России без внешних серверов. Работает по принципу ByeDPI/zapret: локальный VPN только для выбранных приложений (YouTube, ReVanced, Morphe, Music, GmsCore) пропускает их трафик через byedpi, который запутывает DPI провайдера.
+Два Android-приложения для просмотра YouTube в России без внешних серверов, на общем ядре обхода DPI (byedpi, как ByeDPI/zapret):
 
-- Репозиторий: https://github.com/DenHaIz/Tube_DPI (релизы с APK).
-- Пакет `com.tube.dpi`, minSdk 26, targetSdk 36, compileSdk 37. Лицензия GPL-3.0.
-- Второй этап (свой клиент YouTube на NewPipeExtractor с необязательным входом в Google) **отложен** владельцем: хватает автозапуска вместе с YouTube.
+- **Tube** (`:app`, `com.tube.dpi`) — локальный VPN только для выбранных приложений (YouTube, ReVanced, Morphe, Music, GmsCore) пропускает их трафик через byedpi. Репозиторий https://github.com/DenHaIz/Tube_DPI.
+- **Tube Player** (`:client`, `com.tube.player`) — свой лёгкий клиент YouTube (NewPipeExtractor + Media3) со встроенным byedpi, без VPN. Репозиторий https://github.com/DenHaIz/Tube_player. Подробно — раздел «Tube Player» ниже.
+- minSdk 26, targetSdk 36, compileSdk 37. Лицензия GPL-3.0.
 
 ## Стек
 
-Kotlin + Jetpack Compose (BOM 2026.09.00), AGP 9.4.1, Gradle 9.8.2, NDK 29.0.14206865, DataStore, Haze (стекло), Robolectric + Roborazzi. Без DI-фреймворков и навигации: ручной `AppContainer`, один экран и стеклянные листы. Дизайн-основа перенесена из Woody (`..\Android TODO`).
+Kotlin + Jetpack Compose (BOM 2026.09.00), AGP 9.4.1, Gradle 9.8.2, NDK 29.0.14206865, DataStore, Haze (стекло), Robolectric + Roborazzi. Без DI-фреймворков и навигации: ручной `AppContainer`, свои экраны и стеклянные листы. Дизайн-основа перенесена из Woody (`..\Android TODO`). Tube Player дополнительно: NewPipeExtractor 0.27.1 (JitPack, только группа `com.github.TeamNewPipe`), Media3 1.11.1, OkHttp 5.5.1, Coil 3, androidx.webkit.
 
 ## Устройство
 
@@ -27,8 +27,10 @@ YouTube / ReVanced / Morphe ─► TUN (VpnService, addAllowedApplication)
 |---|---|
 | `core-byedpi` | byedpi (submodule) собирается **исполняемым** `libbyedpi.so` (свой Gradle-таск `BuildByeDpi`); `ByeDpiProcess`, `StrategyArgs` (разбор/проверка аргументов, `@fake/` только по имени файла), `Strategies` (41 своя + 60 из ByeByeDPI в `ByeByeDpiPack`), `StrategyTester`, `ChromeHello`, `LocalDns`, `Socks5`; `assets/fake` — фейковые ClientHello/QUIC из zapret |
 | `core-tunnel` | hev-socks5-tunnel (submodule, ndk-build) + JNI `TProxyService`, генератор `TunnelConfig` |
-| `core-ui` | тема `TubeTheme`, стекло, пружины, `GlassSheet`, `LiquidSegmented`, строки настроек (`ToggleRow`, `PermissionRow`, `PillButton`, `SheetTitle`) |
-| `app` | `vpn/TubeVpnService`, `VpnController`, `TunnelState`; `autostart/` (служба спецвозможностей + чистая `AutoStartPolicy`); `strategy/AutoPick`, `StrategyWatchdog`; `data/` (настройки, `NetworkMonitor`, `ResultsStore`); `update/UpdateChecker`; `tile/`, `LaunchActivity` (ярлык); `ui/` |
+| `core-strategy` | общий для обоих приложений подбор: `AutoPick`, `StrategyWatchdog`, `NetworkMonitor`, `ResultsStore`; настройки — через интерфейс `StrategySettings` (у каждого приложения своё хранилище), смена стратегии — колбэком `onSwitch` |
+| `core-ui` | тема `TubeTheme` (палитры `Green` — Tube, `Violet` — Tube Player; `amoled`), стекло, пружины, `GlassSheet`, `LiquidSegmented`, строки настроек (`ToggleRow`, `PermissionRow`, `PillButton`, `SheetTitle`), иконки `TubeIcons` |
+| `app` | Tube: `vpn/TubeVpnService`, `VpnController`, `TunnelState`; `autostart/` (служба спецвозможностей + чистая `AutoStartPolicy`); `data/` (настройки — реализует `StrategySettings`); `update/UpdateChecker`; `tile/`, `LaunchActivity` (ярлык); `ui/` |
+| `client` | Tube Player — см. раздел ниже |
 
 Ключевые решения и почему:
 - **byedpi — отдельный процесс, а не библиотека.** У него глобальное состояние (params, getopt). Процесс изолирует падения и позволяет тестеру запускать 6 стратегий параллельно на разных портах. APK собран с `jniLibs.useLegacyPackaging = true`, иначе исполняемый файл не распакуется в `nativeLibraryDir`.
@@ -65,6 +67,32 @@ YouTube / ReVanced / Morphe ─► TUN (VpnService, addAllowedApplication)
 
 `UpdateChecker` узнаёт версию по очереди: API GitHub → API через `gh-proxy.com` → редирект `github.com/…/releases/latest` → `/tag/vX.Y` напрямую и через `ghfast.top`/`ghproxy.net`. APK качается с GitHub, затем через зеркала `ghfast.top`, `gh-proxy.com`, `gh-proxy.org`, `ghproxy.net` (проверены в ноябре 2026). Каждый скачанный файл проверяется: размер, SHA-256 из поля `digest` API, имя пакета, версия новее и та же подпись, что у установленного приложения — подмена зеркалом до установщика не дойдёт. Сравнивает `tag_name` с `versionName`, качает первый `.apk` из ассетов в `cacheDir/updates` и открывает системный установщик через FileProvider (`${applicationId}.files`). **Значит, у каждого релиза должен быть APK `Tube-X.Y.apk` и тег `vX.Y`.** До 0.4 проверка всегда падала: заголовок `Accept` ставился после `responseCode` («Already connected»).
 
+## Tube Player (`:client`)
+
+```
+NewPipeExtractor ─┐
+Media3 (видео) ───┤                                  ┌─ byedpi (процесс libbyedpi.so) ─► интернет
+Coil (превью) ────┼─► OkHttp ─► BypassProxySelector ─┤   имена резолвит LocalDns → DoH
+InnerTube, SB, RYD┘   (SOCKS5, хост неразрешённым)   └─ «Без обхода»: DIRECT, имена через DoH (DohDns)
+WebView входа ─► androidx.webkit ProxyController ─► тот же SOCKS-порт
+```
+
+- **Обход без VPN.** `net/BypassProxy` поднимает byedpi на `ByeDpiProcess.freePort()`; `BypassController` берёт стратегию сети (`ResultsStore.chosen`) или из настроек и запускает сторож из `:core-strategy` (первая проверка через 5 с); при сбое — замена или полный подбор в фоне. Порт меняется при смене стратегии: OkHttp читает его в `ProxySelector` на каждом новом соединении, пул сбрасывается (`AppContainer.start`). Плеер работает рядом с любым VPN.
+- **Видео.** `youtube/Repository` — NewPipe (поиск, киоски `trending_music/gaming/movies_and_shows/podcasts_episodes`, `live`; канал, плейлист, RSS канала, `StreamInfo`). Обычного «Trending» в NewPipe 0.27 нет. Потоки NewPipe 0.27 отдаёт от клиента **VISIONOS**: загрузка идёт POST с телом `x\0`, параметром `rn` и User-Agent visionOS (`player/YoutubeDataSource`, как `YoutubeHttpDataSource` у NewPipe), редиректы — с сохранением POST (`KeepPostRedirects`, клиент без followRedirects).
+- **DASH.** `player/DashManifest` собирает один MPD на всё видео: AdaptationSet на семейство кодека (avc1, vp9; AV1 не берём — программный декодер), все качества внутри → в Media3 работают «Авто» (ABR) и ручной выбор (`TrackSelectionOverride`); предел качества по сети (Wi-Fi/мобильная) — `setMaxVideoSize`. Нет индексов → видео+звук (`MergingMediaSource`), совсем старые → itag 18, эфиры → HLS. 403/410 (ссылки протухли) → заново `StreamInfo` и продолжение с той же позиции.
+- **Плеер** (`PlayerController`) — один ExoPlayer на процесс; `PlaybackService` (MediaSessionService) — уведомление, фон, обложка через тот же OkHttp. PiP — `setAutoEnterEnabled` на 12+, `onUserLeaveHint` на 8–11, кнопка пауза/играть. Плавающее окно — `PopupPlayer` (`TYPE_APPLICATION_OVERLAY`, TextureView, перетаскивание, щипок, двойной тап — развернуть, бросок вниз — закрыть); нужно разрешение «Поверх других приложений».
+- **Без рекламы.** Ролики идут не через плеер YouTube — рекламы в них нет; `AdBlock` режет рекламные и следящие адреса в OkHttp и WebView и выкидывает рекламные элементы выдачи InnerTube (`adSlotRenderer`, `promotedVideoRenderer` …). **SponsorBlock** — запрос по 4 символам SHA-256 id видео, категории: пропуск / кнопка / метка / нет; отрезки на полосе прокрутки, «Отменить» после пропуска. **Return YouTube Dislike** — дизлайки.
+- **Аккаунт — необязательный.** `LoginScreen`: WebView на accounts.google.com через byedpi (`ProxyController`, UA без `wv`); после входа cookie youtube.com (SAPISID…) и `VISITOR_DATA` → `AccountStore` (файл, AES-GCM ключом Android Keystore). `InnerTube`: `browse` FEwhat_to_watch / FEsubscriptions / FEchannels, `Authorization: SAPISIDHASH`, разбор готовыми экстракторами NewPipe (`YoutubeStreamInfoItemExtractor`, `…LockupExtractor`). NewPipe всегда анонимный — cookie туда не передаются. Без входа «Для вас» = похожие на недавно просмотренные, подписки — локальные (RSS).
+- **Данные** — JSON + `AtomicFile` (`data/Library`: история до 1000, позиции, подписки, поиск), настройки — DataStore. Room не нужен.
+- **Интерфейс — как оригинальный YouTube** (по просьбе владельца, в отличие от Tube): текст слева, аватар рядом с заголовком, превью во всю ширину на телефоне и сетка на планшете, чипы 32dp, «Подписаться» справа, нижняя панель Главная / Подписки / Вы, мини-плеер над ней. Палитра `TubePalette.Violet` (без зелёного), AMOLED. Анимации быстрые и плавные (`ui/Anim`, 120–250 мс). Логотип — скруглённая кнопка «play» с зелёным градиентом и бежевой окантовкой (окантовка рисуется под заливкой, иначе внутренние углы острые).
+- Навигация своя: вкладки + стек `Route` в `MainViewModel`, страница видео — слой поверх (свернуть = мини-плеер). Телефон боком с открытым видео — плеер на весь экран без панелей; ширина ≥ 900dp — похожие справа.
+
+Проверки: `LogicTest` (SAPISIDHASH, SponsorBlock, MPD + разбор Media3, правила запросов googlevideo, AdBlock, разбор InnerTube, библиотека), `PipelineNetworkTest` (`-Pnetwork`: поиск, киоск, подсказки, `StreamInfo`, 256 КБ видео и звука через SOCKS, ExoPlayer доходит до READY и играет 2 с), `ScreenshotTest` (`-Pscreenshots`: главная светлая / AMOLED / EN / боком / планшет, мини-плеер, поиск, видео телефон / AMOLED / планшет, канал, библиотека, подписки, листы, логотип). В сетевом тесте ExoPlayer ждём по реальному времени: `TestPlayerRunHelper` на часах Robolectric не дожидается READY при настоящих загрузках.
+
+### Релиз Tube Player
+
+`versionCode`/`versionName` в `client/build.gradle.kts`; APK — `TubePlayer-X.Y.apk` в корне (в git не попадает); тег `vX.Y` в https://github.com/DenHaIz/Tube_player (remote `player`, код — этот же монорепозиторий; локальные теги `vX.Y` заняты Tube, поэтому тег плеера ставится только на сервере: `git push player main` и `git push player <коммит>:refs/tags/vX.Y`); `gh release create vX.Y TubePlayer-X.Y.apk --repo DenHaIz/Tube_player`, описание максимально короткое, RU + EN. Автор — только DenHaIz.
+
 ## Сборка на сервере разработки
 
 Тулчейн общий с Woody: `.toolchain` — junction на `..\Android TODO\.toolchain` (создаётся `env.ps1`). Путь без пробелов обязателен: ndk-build падает на пробеле в «Android TODO», а 8.3-имена Gradle разворачивает обратно. NDK 29 доставлен в общий SDK; `sdkmanager` устарел — `cmdline-tools\latest\bin\android.exe sdk install <пакет>`.
@@ -76,6 +104,9 @@ git submodule update --init --recursive
 .\gradlew.bat :app:testDebugUnitTest -Pscreenshots      # скриншоты → app\build\outputs\roborazzi
 .\gradlew.bat :core-byedpi:testDebugUnitTest -Pnetwork  # проверки через настоящий интернет (DoH, пробы, Chrome-hello)
 .\gradlew.bat :app:lintDebug :app:assembleRelease
+.\gradlew.bat :client:testDebugUnitTest -Pscreenshots   # → client\build\outputs\roborazzi
+.\gradlew.bat :client:testDebugUnitTest -Pnetwork --tests "*PipelineNetworkTest*"
+.\gradlew.bat :client:lintDebug :client:assembleRelease
 ```
 
 - Эмулятора нет. Визуальная проверка — только скриншоты Roborazzi; сеть — тесты `-Pnetwork`.
@@ -103,9 +134,14 @@ Release подписан debug-ключом общего тулчейна (`.too
 - **Стратегии с `-A`:** запасная группа должна делать настоящий обход. Пустая (как была в OOB TIMEOUT до 0.5) после первого сбоя запоминает IP «без обхода» навсегда (cache-ttl по умолчанию 0). Последняя группа без `-K`/`-H`/детекта нужна для прочего трафика (BEELINE до 0.5 его отбрасывал).
 - **`-Y` и `-S`** на ядрах, где запрещены SO_ATTACH_FILTER/TCP_MD5SIG, обрывают соединение — такие стратегии просто не проходят подбор.
 - Release подписан debug-ключом тулчейна: смена ключа сломает обновление у всех пользователей. Ключ хранить, наружу не отдавать.
-- Предпочтения владельца по интерфейсу: почти весь текст по центру, коротко, без мелкого шрифта (`labelSmall` не использовать для пояснений), главный экран без прокрутки.
+- Предпочтения владельца по интерфейсу Tube: почти весь текст по центру, коротко, без мелкого шрифта (`labelSmall` не использовать для пояснений), главный экран без прокрутки. **Tube Player — наоборот, как оригинальный YouTube** (слева, расположение и размеры кнопок как у YouTube), без зелёного.
+- **Lint и Media3:** opt-in `UnstableApi` из `compilerOptions` lint не видит — в файлах с Media3 нужен `@file:androidx.annotation.OptIn(markerClass = [UnstableApi::class])`.
+- **nanojson** — runtime-зависимость NewPipeExtractor; для разбора InnerTube подключена явно (та же версия-коммит).
+- **Robolectric:** `PlayerApp` не запускает обход при `Build.FINGERPRINT == "robolectric"`; Keystore в тестах недоступен — `AccountStore` молча не пишет файл.
 
 ## История версий
+
+- **Tube Player 0.1** — первый выпуск клиента: поиск, главная (тренды и «Для вас»), каналы, плейлисты, DASH с выбором качества, фон, PiP, плавающее окно, история и подписки, SponsorBlock, дизлайки, блокировщик рекламы, AMOLED, необязательный вход в Google; обход — встроенный byedpi без VPN.
 
 - **0.1** — VPN + byedpi + hev, автозапуск, подбор, DoH для byedpi, ~80 стратегий.
 - **0.2** — результаты по сетям, сортировка, сторож, обновления из GitHub, вёрстка по центру.

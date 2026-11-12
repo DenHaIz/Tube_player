@@ -1,4 +1,4 @@
-package com.tube.dpi.data
+package com.tube.strategy
 
 import android.content.Context
 import android.net.ConnectivityManager

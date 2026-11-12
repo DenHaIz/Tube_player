@@ -4,9 +4,9 @@ import android.app.Application
 import android.content.Context
 import com.tube.byedpi.Strategies
 import com.tube.byedpi.Strategy
-import com.tube.dpi.data.NetworkMonitor
-import com.tube.dpi.data.ResultsStore
-import com.tube.dpi.strategy.AutoPick
+import com.tube.strategy.AutoPick
+import com.tube.strategy.NetworkMonitor
+import com.tube.strategy.ResultsStore
 import com.tube.dpi.update.UpdateChecker
 import kotlinx.coroutines.flow.first
 import com.tube.dpi.data.SettingsRepository
@@ -55,11 +55,7 @@ class AppContainer(context: Context) {
     val dynamicColors: StateFlow<Boolean?> by lazy { settings.dynamicColors.stateIn(scope, SharingStarted.Eagerly, null) }
 
     /** Стратегия по id: встроенная, из набора ByeByeDPI или своя. */
-    suspend fun resolveStrategy(id: String): Strategy? = when (id) {
-        Strategies.CUSTOM_ID -> settings.customArgs.first().takeIf { it.isNotBlank() }
-            ?.let { Strategy(Strategies.CUSTOM_ID, "CUSTOM", it, "Своя стратегия", "Custom strategy") }
-        else -> Strategies.byId(id)
-    }
+    suspend fun resolveStrategy(id: String): Strategy? = settings.resolveStrategy(id)
 
     /** Выбрать стратегию: глобально и для текущей сети. */
     suspend fun chooseStrategy(id: String) {

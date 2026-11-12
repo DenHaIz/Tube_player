@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tube.byedpi.Strategies
 import com.tube.byedpi.Strategy
+import com.tube.strategy.StrategySettings
 import com.tube.ui.i18n.AppLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -27,7 +28,7 @@ data class TunnelSettings(
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-class SettingsRepository(private val context: Context) {
+class SettingsRepository(private val context: Context) : StrategySettings {
     private val themeKey = stringPreferencesKey("theme")
     private val languageKey = stringPreferencesKey("language")
     private val dynamicColorsKey = booleanPreferencesKey("dynamic_colors")
@@ -88,10 +89,15 @@ class SettingsRepository(private val context: Context) {
     }
 
     private fun resolveStrategy(id: String?, customArgs: String?): Strategy = when {
-        id == Strategies.CUSTOM_ID && !customArgs.isNullOrBlank() ->
-            Strategy(Strategies.CUSTOM_ID, "CUSTOM", customArgs, "Своя стратегия", "Custom strategy")
+        id == Strategies.CUSTOM_ID && !customArgs.isNullOrBlank() -> StrategySettings.customStrategy(customArgs)!!
         else -> id?.let { Strategies.byId(it) } ?: Strategies.default
     }
+
+    override suspend fun strategy(): Strategy = strategy.first()
+    override suspend fun customArgs(): String = customArgs.first()
+    override suspend fun blockQuic(): Boolean = blockQuic.first()
+    override suspend fun fakeSni(): String = fakeSni.first()
+    override suspend fun watchdog(): Boolean = watchdog.first()
 
     suspend fun setThemeMode(mode: ThemeMode) = edit { it[themeKey] = mode.name }
 

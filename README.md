@@ -1,6 +1,11 @@
-# Tube
+# Tube и Tube Player
 
-Android-приложение для обхода DPI-блокировки YouTube в России — по принципу ByeDPI / zapret, без внешних серверов.
+Два Android-приложения для YouTube в России — по принципу ByeDPI / zapret, без внешних серверов.
+
+- **Tube Player** (`client`) — свой лёгкий клиент YouTube со встроенным обходом DPI: VPN не нужен, работает рядом с любым VPN. Без рекламы, SponsorBlock, дизлайки, фон, PiP и плавающее окно, выбор качества, AMOLED-тема, история и подписки без аккаунта; вход в Google — по желанию. Релизы: https://github.com/DenHaIz/Tube_player/releases
+- **Tube** (`app`) — локальный VPN, который пускает через обход только выбранные приложения (YouTube, ReVanced, Morphe). Релизы: https://github.com/DenHaIz/Tube_DPI/releases
+
+## Tube
 
 ```
 YouTube / ReVanced / Morphe ─► TUN (VpnService, только выбранные приложения)
@@ -21,8 +26,10 @@ YouTube / ReVanced / Morphe ─► TUN (VpnService, только выбранн�
 |---|---|
 | `core-byedpi` | byedpi (submodule) → исполняемый `libbyedpi.so`; `ByeDpiProcess`, `StrategyArgs`, `Strategies`, `StrategyTester` |
 | `core-tunnel` | hev-socks5-tunnel (submodule, ndk-build) + JNI `TProxyService`, `TunnelConfig` |
+| `core-strategy` | подбор стратегии, сторож, результаты по сетям — общие для обоих приложений |
 | `core-ui` | тема, стекло, компоненты (порт из Woody) |
-| `app` | VPN-сервис, автозапуск, плитка, экраны |
+| `app` | Tube: VPN-сервис, автозапуск, плитка, экраны |
+| `client` | Tube Player: NewPipeExtractor, Media3 (DASH), OkHttp через встроенный byedpi, SponsorBlock, вход в Google |
 
 byedpi собирается исполняемым файлом, а не библиотекой: у него глобальное состояние, поэтому каждый экземпляр — отдельный процесс (`packaging.jniLibs.useLegacyPackaging = true`, чтобы файл распаковывался в `nativeLibraryDir`).
 
@@ -36,6 +43,8 @@ git submodule update --init --recursive
 .\gradlew.bat testDebugUnitTest                  # логика (Robolectric)
 .\gradlew.bat :app:testDebugUnitTest -Pscreenshots   # скриншоты → app\build\outputs\roborazzi
 .\gradlew.bat :app:lintDebug :app:assembleRelease
+.\gradlew.bat :client:testDebugUnitTest -Pscreenshots   # скриншоты Tube Player
+.\gradlew.bat :client:lintDebug :client:assembleRelease
 ```
 
 Подробности для продолжения работы — в [HANDOFF.md](HANDOFF.md).
@@ -53,4 +62,4 @@ Release подписан debug-ключом общего тулчейна (`.too
 
 ## Лицензия
 
-GPL-3.0. byedpi (hufrea) и hev-socks5-tunnel (heiher) — MIT; фейковые пакеты из zapret (bol-van) — MIT; набор стратегий из ByeByeDPI (romanvht) — GPL-3.0.
+GPL-3.0. NewPipeExtractor (TeamNewPipe) — GPL-3.0; SponsorBlock и Return YouTube Dislike — открытые API сообществ. byedpi (hufrea) и hev-socks5-tunnel (heiher) — MIT; фейковые пакеты из zapret (bol-van) — MIT; набор стратегий из ByeByeDPI (romanvht) — GPL-3.0.

@@ -32,7 +32,7 @@ fun AmbientBackground(colors: List<Color>, seed: Long, modifier: Modifier = Modi
             radius = 0.68f + random.nextFloat() * 0.3f,
         )
     }
-    val strength = if (theme.isDark) 0.40f else 0.46f
+    val strength = (if (theme.isDark) 0.40f else 0.46f) * theme.ambientStrength
     Canvas(modifier) {
         drawRect(theme.background)
         blobs.forEach { drawBlob(it, strength) }

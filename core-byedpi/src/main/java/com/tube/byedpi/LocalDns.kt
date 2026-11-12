@@ -81,6 +81,16 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
         }
     }
 
+    /**
+     * Адреса IPv4 имени через DoH (с тем же кэшем, что у byedpi) — для соединений приложения без прокси.
+     * Пустой список — имя не нашлось или DoH недоступен.
+     */
+    fun lookup(host: String): List<InetAddress> {
+        val query = runCatching { aQuery(host) }.getOrNull() ?: return emptyList()
+        val response = resolve(query) ?: return emptyList()
+        return parseA(response)
+    }
+
     /** Заранее узнать адреса (A) — при старте VPN, чтобы первые соединения YouTube не ждали DoH. */
     fun prefetch(hosts: Collection<String>) {
         hosts.forEach { host ->
@@ -246,6 +256,38 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
         /** Один сервер на процесс: им пользуются и VPN, и тестер стратегий. */
         fun shared(): LocalDns = instance ?: synchronized(this) {
             instance ?: LocalDns(DatagramSocket(0, InetAddress.getByName("127.0.0.1"))).also { instance = it }
+        }
+
+        /** Записи A из DNS-ответа (wire format); CNAME и прочее пропускаются. */
+        internal fun parseA(response: ByteArray): List<InetAddress> {
+            if (response.size < 12 || response[3].toInt() and 0x0F != 0) return emptyList()
+            fun u16(at: Int) = ((response[at].toInt() and 0xFF) shl 8) or (response[at + 1].toInt() and 0xFF)
+            fun skipName(start: Int): Int {
+                var at = start
+                while (at < response.size) {
+                    val len = response[at].toInt() and 0xFF
+                    if (len == 0) return at + 1
+                    if (len and 0xC0 == 0xC0) return at + 2
+                    at += len + 1
+                }
+                return at
+            }
+            val questions = u16(4)
+            val answers = u16(6)
+            var at = 12
+            repeat(questions) { at = skipName(at) + 4 }
+            val out = ArrayList<InetAddress>()
+            repeat(answers) {
+                at = skipName(at)
+                if (at + 10 > response.size) return out
+                val type = u16(at)
+                val length = u16(at + 8)
+                at += 10
+                if (at + length > response.size) return out
+                if (type == 1 && length == 4) out += InetAddress.getByAddress(response.copyOfRange(at, at + 4))
+                at += length
+            }
+            return out
         }
 
         /** Секция вопроса (имя + тип + класс) без id и флагов — ключ кэша. */

@@ -1,20 +1,16 @@
-package com.tube.dpi.strategy
+package com.tube.strategy
 
 import android.content.Context
 import com.tube.byedpi.ProbeResult
 import com.tube.byedpi.Strategy
 import com.tube.byedpi.StrategyScore
 import com.tube.byedpi.StrategyTester
-import com.tube.dpi.AppContainer
-import com.tube.dpi.vpn.TunnelState
-import com.tube.dpi.vpn.WatchdogStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -22,52 +18,59 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** Почему сторож сменил стратегию. */
 enum class SwitchReason { Failed, NetworkChanged }
 
+/** Итог последней проверки сторожа — для экрана. */
+data class WatchdogStatus(val checkedAt: Long, val ok: Boolean)
+
 /**
  * Сторож работающего обхода:
  * - раз в [CHECK_INTERVAL_MS] проверяет узлы YouTube через работающий прокси (VPN не останавливается);
  * - два провала подряд при живом интернете → ищет замену среди рабочих в этой сети, а если таких нет —
  *   запускает подбор в фоне (не чаще раза в час на сеть);
  * - при смене сети сразу подставляет стратегию, запомненную для новой сети.
- * Смена — через [onSwitch] (сервис перезапускает туннель, этот цикл при этом завершается).
+ * Смена — через [onSwitch] (VPN перезапускает туннель, плеер — прокси; этот цикл при этом завершается).
  */
 class StrategyWatchdog(
     private val context: Context,
-    private val container: AppContainer,
+    private val network: NetworkMonitor,
+    private val results: ResultsStore,
+    private val autoPick: AutoPick,
+    private val settings: StrategySettings,
     private val proxyPort: Int,
     private val currentId: String,
+    private val onStatus: (WatchdogStatus) -> Unit = {},
+    private val firstCheckMs: Long = FIRST_CHECK_MS,
     private val onSwitch: suspend (Strategy, SwitchReason) -> Unit,
 ) {
     suspend fun run() = coroutineScope {
-        val network = container.network
         val networkChanged = Channel<Unit>(Channel.CONFLATED)
         launch { network.current.drop(1).collect { networkChanged.trySend(Unit) } }
         var lastKey = network.current.value?.key
         var failures = 0
-        var interval = FIRST_CHECK_MS
+        var interval = firstCheckMs
         while (isActive) {
             withTimeoutOrNull(interval) { networkChanged.receive() }
             interval = CHECK_INTERVAL_MS
-            if (!container.settings.watchdog.first()) continue
+            if (!settings.watchdog()) continue
 
             val key = network.current.value?.key ?: continue
             if (key != lastKey) {
                 lastKey = key
                 failures = 0
-                val chosen = container.results.of(key)?.chosen
-                val strategy = chosen?.let { container.resolveStrategy(it) }
+                val chosen = results.of(key)?.chosen
+                val strategy = chosen?.let { settings.resolveStrategy(it) }
                 if (strategy != null && strategy.id != currentId) {
                     onSwitch(strategy, SwitchReason.NetworkChanged)
                     return@coroutineScope
                 }
             }
 
-            val checks = checkCurrent(container.results.of(key)?.videoHost)
+            val checks = checkCurrent(results.of(key)?.videoHost)
             val ok = checks.all { it.ok }
-            TunnelState.setWatchdog(WatchdogStatus(System.currentTimeMillis(), ok))
+            onStatus(WatchdogStatus(System.currentTimeMillis(), ok))
             if (ok) {
                 failures = 0
                 // Рабочая стратегия запоминается для сети, если там ещё ничего не выбрано.
-                if (container.results.of(key)?.chosen == null) container.results.update(key) { it.copy(chosen = currentId) }
+                if (results.of(key)?.chosen == null) results.update(key) { it.copy(chosen = currentId) }
                 continue
             }
             if (!internetAvailable()) continue
@@ -77,8 +80,8 @@ class StrategyWatchdog(
                 continue
             }
             // Стратегия не работает в самом VPN — запоминаем это, чтобы она не стояла в «рабочих» первой.
-            container.resolveStrategy(currentId)?.let { current ->
-                container.results.update(key) { it.copy(scores = it.scores + (currentId to StrategyScore(current, checks))) }
+            settings.resolveStrategy(currentId)?.let { current ->
+                results.update(key) { it.copy(scores = it.scores + (currentId to StrategyScore(current, checks))) }
             }
             val replacement = findReplacement(key) ?: continue
             onSwitch(replacement, SwitchReason.Failed)
@@ -97,8 +100,7 @@ class StrategyWatchdog(
     }
 
     private suspend fun findReplacement(key: String): Strategy? {
-        val autoPick = container.autoPick
-        val saved = container.results.of(key)
+        val saved = results.of(key)
         saved?.working?.map { it.strategy }?.filter { it.id != currentId }?.take(MAX_CANDIDATES)?.forEach { candidate ->
             if (autoPick.testOne(candidate).works) return candidate
         }
@@ -109,7 +111,7 @@ class StrategyWatchdog(
 
     companion object {
         // Первая проверка вскоре после включения: нерабочая стратегия заменяется за полминуты, а не за полторы минуты.
-        private const val FIRST_CHECK_MS = 15_000L
+        const val FIRST_CHECK_MS = 15_000L
         private const val CHECK_INTERVAL_MS = 10 * 60_000L
         private const val RECHECK_MS = 15_000L
         private const val FULL_RETEST_MS = 60 * 60_000L

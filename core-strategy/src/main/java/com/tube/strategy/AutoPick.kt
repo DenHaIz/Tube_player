@@ -1,4 +1,4 @@
-package com.tube.dpi.strategy
+package com.tube.strategy
 
 import android.content.Context
 import com.tube.byedpi.LocalDns
@@ -7,9 +7,6 @@ import com.tube.byedpi.Strategy
 import com.tube.byedpi.StrategyScore
 import com.tube.byedpi.StrategyTester
 import com.tube.byedpi.TestEvent
-import com.tube.dpi.data.NetworkMonitor
-import com.tube.dpi.data.ResultsStore
-import com.tube.dpi.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,7 +16,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -42,7 +38,7 @@ data class TestProgress(
  */
 class AutoPick(
     private val context: Context,
-    private val settings: SettingsRepository,
+    private val settings: StrategySettings,
     private val results: ResultsStore,
     private val network: NetworkMonitor,
     private val scope: CoroutineScope,
@@ -89,16 +85,15 @@ class AutoPick(
     private suspend fun runExclusive(background: Boolean): List<StrategyScore> {
         network.refresh()
         val key = network.current.value?.key ?: return emptyList()
-        val custom = settings.customArgs.first().takeIf { it.isNotBlank() }
-        val candidates = Strategies.all + listOfNotNull(custom?.let { Strategy(Strategies.CUSTOM_ID, "CUSTOM", it, "Своя стратегия", "Custom strategy") })
+        val candidates = Strategies.all + listOfNotNull(StrategySettings.customStrategy(settings.customArgs()))
         val tester = tester()
-        val blockUdp = settings.blockQuic.first()
+        val blockUdp = settings.blockQuic()
         _progress.value = TestProgress(running = true, total = candidates.size, background = background)
         try {
             val systemDns = withContext(Dispatchers.IO) { tester.systemDnsResolves() }
             // Настоящий видеоузел сети: страница просмотра читается через текущую и ранее рабочие стратегии.
             val saved = results.of(key)
-            val current = settings.strategy.first()
+            val current = settings.strategy()
             val discoveryOrder = (listOf(current) + saved?.working?.map { it.strategy }.orEmpty() + Strategies.builtIn).distinctBy { it.id }
             LocalDns.shared().prefetch(LocalDns.YouTubeHosts + LocalDns.videoCluster(saved?.videoHost))
             val videoHost = tester.discoverVideoHost(discoveryOrder, blockUdp) ?: saved?.videoHost
@@ -163,12 +158,12 @@ class AutoPick(
     /** Проверка одной стратегии на свободном порту; результат тоже сохраняется. */
     suspend fun testOne(strategy: Strategy): StrategyScore {
         val videoHost = results.of(network.current.value?.key)?.videoHost
-        val score = tester().testOne(strategy, StrategyTester.defaultProbes(videoHost), settings.blockQuic.first())
+        val score = tester().testOne(strategy, StrategyTester.defaultProbes(videoHost), settings.blockQuic())
         network.current.value?.key?.let { key -> results.update(key) { it.copy(scores = it.scores + (strategy.id to score)) } }
         return score
     }
 
-    private suspend fun tester() = StrategyTester(context, fakeSni = settings.fakeSni.first())
+    private suspend fun tester() = StrategyTester(context, fakeSni = settings.fakeSni())
 
     companion object {
         private const val VERIFY_LIMIT = 16

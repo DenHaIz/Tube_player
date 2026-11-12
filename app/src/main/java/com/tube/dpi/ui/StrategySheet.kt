@@ -43,10 +43,10 @@ import com.tube.byedpi.ProbeKind
 import com.tube.byedpi.Strategies
 import com.tube.byedpi.Strategy
 import com.tube.byedpi.StrategyScore
-import com.tube.dpi.data.NetworkId
-import com.tube.dpi.data.NetworkKind
-import com.tube.dpi.data.NetworkResults
-import com.tube.dpi.strategy.TestProgress
+import com.tube.strategy.NetworkId
+import com.tube.strategy.NetworkKind
+import com.tube.strategy.NetworkResults
+import com.tube.strategy.TestProgress
 import com.tube.ui.components.PillButton
 import com.tube.ui.components.SheetTitle
 import com.tube.ui.components.bouncyClickable

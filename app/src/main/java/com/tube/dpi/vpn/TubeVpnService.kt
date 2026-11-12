@@ -13,7 +13,7 @@ import com.tube.byedpi.LocalDns
 import com.tube.byedpi.StrategyArgs
 import com.tube.dpi.TubeApp
 import com.tube.dpi.apps.TargetApps
-import com.tube.dpi.strategy.StrategyWatchdog
+import com.tube.strategy.StrategyWatchdog
 import com.tube.tunnel.TProxyService
 import com.tube.tunnel.TunnelConfig
 import kotlinx.coroutines.CancellationException
@@ -192,7 +192,10 @@ class TubeVpnService : VpnService() {
         TunnelState.set(TunnelStatus.Running(System.currentTimeMillis(), settings.strategy.name, byAutostart))
         monitor = scope.launch { monitorLoop(newProxy) }
         watchdog = scope.launch {
-            StrategyWatchdog(this@TubeVpnService, container, port, settings.strategy.id) { next, reason ->
+            StrategyWatchdog(
+                this@TubeVpnService, container.network, container.results, container.autoPick, container.settings,
+                port, settings.strategy.id, onStatus = TunnelState::setWatchdog,
+            ) { next, reason ->
                 container.chooseStrategy(next.id)
                 Notifications.showSwitched(this@TubeVpnService, settings.strategy.name, next.name, reason)
                 startService(Intent(this@TubeVpnService, TubeVpnService::class.java).setAction(ACTION_RESTART).putExtra(EXTRA_BY_AUTOSTART, byAutostart))

@@ -10,10 +10,10 @@ import com.tube.dpi.TubeApp
 import com.tube.dpi.apps.InstalledApp
 import com.tube.dpi.apps.TargetApps
 import com.tube.dpi.autostart.AutoStartService
-import com.tube.dpi.data.NetworkId
-import com.tube.dpi.data.NetworkResults
+import com.tube.strategy.NetworkId
+import com.tube.strategy.NetworkResults
 import com.tube.dpi.data.ThemeMode
-import com.tube.dpi.strategy.TestProgress
+import com.tube.strategy.TestProgress
 import com.tube.dpi.update.Release
 import com.tube.dpi.update.UpdateState
 import com.tube.dpi.vpn.TunnelState

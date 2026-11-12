@@ -93,12 +93,12 @@ object Notifications {
     }
 
     /** Сторож сменил стратегию — короткое уведомление без звука. */
-    fun showSwitched(context: Context, from: String, to: String, reason: com.tube.dpi.strategy.SwitchReason) {
+    fun showSwitched(context: Context, from: String, to: String, reason: com.tube.strategy.SwitchReason) {
         ensureChannels(context)
         val lang = lang(context)
         val title = when (reason) {
-            com.tube.dpi.strategy.SwitchReason.Failed -> lang.pick("$from перестала работать", "$from stopped working")
-            com.tube.dpi.strategy.SwitchReason.NetworkChanged -> lang.pick("Другая сеть", "Network changed")
+            com.tube.strategy.SwitchReason.Failed -> lang.pick("$from перестала работать", "$from stopped working")
+            com.tube.strategy.SwitchReason.NetworkChanged -> lang.pick("Другая сеть", "Network changed")
         }
         notify(
             context, ID_SWITCHED,

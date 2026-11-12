@@ -20,7 +20,7 @@ import com.tube.byedpi.ProbeResult
 import com.tube.byedpi.Strategies
 import com.tube.byedpi.StrategyScore
 import com.tube.dpi.TubeApp
-import com.tube.dpi.data.NetworkResults
+import com.tube.strategy.NetworkResults
 import com.tube.dpi.ui.MainViewModel
 import com.tube.dpi.ui.ShellActions
 import com.tube.dpi.ui.TubeAppShell

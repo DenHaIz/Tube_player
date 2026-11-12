@@ -15,7 +15,7 @@ sealed interface TunnelStatus {
 }
 
 /** Последняя проверка сторожа: когда и прошли ли узлы YouTube через текущую стратегию. */
-data class WatchdogStatus(val checkedAt: Long, val ok: Boolean)
+typealias WatchdogStatus = com.tube.strategy.WatchdogStatus
 
 /** Объём трафика через туннель с момента запуска и текущая скорость (байт/с). */
 data class Traffic(val rxBytes: Long = 0, val txBytes: Long = 0, val rxRate: Long = 0, val txRate: Long = 0)

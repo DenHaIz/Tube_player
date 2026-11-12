@@ -149,6 +149,7 @@ fun VideoScreen(
         val landscape = maxWidth > maxHeight
         // Планшет боком: плеер и похожие рядом. Телефон боком (низкий экран) — плеер на весь экран.
         val wide = maxWidth >= WideMin && maxHeight >= 480.dp && landscape
+        val twoColumns = maxWidth >= 600.dp
         val height = constraints.maxHeight.toFloat()
         val threshold = with(density) { 96.dp.toPx() }
         val fling = with(density) { 900.dp.toPx() }
@@ -208,14 +209,15 @@ fun VideoScreen(
             wide -> Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 // Планшет боком: плеер с описанием слева (плеер скруглён и с полями, как в YouTube для планшетов),
                 // справа — похожие видео компактными строками: превью слева, название справа.
-                LazyColumn(Modifier.weight(0.64f).fillMaxHeight(), contentPadding = PaddingValues(start = 16.dp, top = 12.dp, bottom = 24.dp)) {
-                    item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))) }
+                // Поля симметричные: плеер, текст и кнопки — в 16dp от краёв колонки, между колонками — тоже 16dp.
+                LazyColumn(Modifier.weight(0.64f).fillMaxHeight(), contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 24.dp)) {
+                    item { Box(Modifier.padding(horizontal = 12.dp)) { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp))) } }
                     info(state, subscribed, withComments, liked, disliked, comments)
                 }
                 Box(Modifier.weight(0.36f).fillMaxHeight()) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                        contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
                     ) {
                         related(state, hideShorts, actions, compact = true)
                     }
@@ -232,7 +234,8 @@ fun VideoScreen(
                         contentPadding = PaddingValues(bottom = 24.dp + WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()),
                     ) {
                         info(state, subscribed, withComments, liked, disliked, comments)
-                        related(state, hideShorts, actions, padded = true)
+                        // Планшет стоя: похожие — в две колонки карточками, а не огромными превью во всю ширину.
+                        if (twoColumns) related(state, hideShorts, actions, columns = 2) else related(state, hideShorts, actions, padded = true)
                     }
                     CommentsLayer(commentsOpen, comments) { commentsOpen = false }
                 }
@@ -448,9 +451,26 @@ private fun Description(details: com.tube.player.youtube.VideoDetails, onSeek: (
     }
 }
 
-private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, actions: VideoActions, padded: Boolean = false, compact: Boolean = false) {
+private fun LazyListScope.related(state: PlaybackState, hideShorts: Boolean, actions: VideoActions, padded: Boolean = false, compact: Boolean = false, columns: Int = 1) {
     val related = state.details?.related.orEmpty().filter { !hideShorts || it !is VideoItem || !it.short }
     if (related.isEmpty()) return
+    if (columns > 1) {
+        val rows = related.chunked(columns)
+        items(rows.size, key = { "rr" + rows[it].first().url }) { i ->
+            Row(
+                Modifier
+                    .animateItem(fadeInSpec = Anim.fade(), placementSpec = Anim.move(), fadeOutSpec = Anim.out())
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, top = if (i == 0) 8.dp else 0.dp, bottom = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                rows[i].forEach { item -> Box(Modifier.weight(1f)) { FeedItemCard(item, actions.onOpen) } }
+                // Последний ряд неполный — пустое место, чтобы карточка не растягивалась на всю ширину.
+                repeat(columns - rows[i].size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+        return
+    }
     if (compact) {
         items(related.size, key = { "r" + related[it].url }) { i ->
             val item = related[i]

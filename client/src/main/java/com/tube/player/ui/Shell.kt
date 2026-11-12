@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -56,6 +57,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -105,8 +107,10 @@ class ShellActions(
 private val TopBarHeight = 56.dp
 private val BottomBarHeight = 56.dp
 private val MiniHeight = 62.dp
-/** Боковая панель вкладок — планшет и широкий экран боком (как в YouTube для планшетов). */
-private val RailWidth = 80.dp
+/** На планшете мини-плеер — карточка с полями: столько добавляется к его высоте. */
+private val MiniCardExtra = 12.dp
+/** Боковая панель у правого края — планшет и широкий экран боком: логотип, вкладки и кнопки. */
+private val RailWidth = 96.dp
 /** С какой ширины в горизонтальном виде вкладки уходят из-под низа в боковую панель. */
 val WideMin = 840.dp
 
@@ -146,15 +150,26 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize().background(TubeTheme.colors.background))
 
-            // Планшет (или широкий экран) боком: вкладки — слева, внизу остаётся только мини-плеер.
+            // Планшет (или широкий экран) боком: всё управление — в панели у правого края (логотип, вкладки, поиск,
+            // обход, настройки), верхней панели нет — контент начинается от самого верха; внизу только мини-плеер.
             val rail = maxWidth >= WideMin && maxWidth > maxHeight && !login
+            // Сменилось ли положение в этом кадре — тогда «Player» у логотипа плавно уходит или возвращается.
+            var lastRail by remember { mutableStateOf(rail) }
+            val railChanged = lastRail != rail
+            androidx.compose.runtime.SideEffect { lastRail = rail }
+            // Верхняя панель боком — только на вложенных экранах (поиск, канал): там «назад» и поле поиска.
+            val topBar = !login && (!rail || route != null)
             val insets = WindowInsets.safeDrawing.asPaddingValues()
             val dir = LocalLayoutDirection.current
             val padding = PaddingValues(
-                start = insets.calculateStartPadding(dir) + if (rail) RailWidth else 0.dp,
-                end = insets.calculateEndPadding(dir),
-                top = insets.calculateTopPadding() + if (login) 0.dp else TopBarHeight,
-                bottom = insets.calculateBottomPadding() + (if (rail) 0.dp else BottomBarHeight) + (if (hasMini) MiniHeight else 0.dp) + 8.dp,
+                start = insets.calculateStartPadding(dir),
+                end = insets.calculateEndPadding(dir) + if (rail) RailWidth else 0.dp,
+                top = insets.calculateTopPadding() + when {
+                    login -> 0.dp
+                    topBar -> TopBarHeight
+                    else -> 8.dp
+                },
+                bottom = insets.calculateBottomPadding() + (if (rail) 0.dp else BottomBarHeight) + (if (hasMini) MiniHeight + (if (maxWidth >= 600.dp) MiniCardExtra else 0.dp) else 0.dp) + 8.dp,
             )
             val key: Any = route ?: vm.tab
             Box(Modifier.fillMaxSize()) {
@@ -220,7 +235,10 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
             }
 
             if (!login) {
+                AnimatedVisibility(topBar, enter = fadeIn(Anim.fade()), exit = fadeOut(Anim.out())) {
                 TopBar(
+                    rail = rail,
+                    railChanged = railChanged,
                     searching = searching,
                     query = vm.query,
                     onQuery = vm::onQueryChange,
@@ -233,9 +251,20 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     canGoBack = route != null,
                     account = account,
                 )
+                }
                 BottomArea(vm, state, hasMini, rail, onClose = { playback.close() })
-                AnimatedVisibility(rail, enter = fadeIn(Anim.fade()), exit = fadeOut(Anim.out())) {
-                    NavRail(vm, Modifier.padding(top = insets.calculateTopPadding() + TopBarHeight))
+                AnimatedVisibility(
+                    rail,
+                    Modifier.align(Alignment.TopEnd),
+                    enter = slideInHorizontally(Anim.move()) { it } + fadeIn(Anim.fade()),
+                    exit = slideOutHorizontally(Anim.move()) { it } + fadeOut(Anim.out()),
+                ) {
+                    NavRail(
+                        vm, railChanged, bypass, account,
+                        onSearch = { vm.push(Route.Search) },
+                        onBypass = { sheet = Sheet.Bypass },
+                        onSettings = { sheet = Sheet.Settings },
+                    )
                 }
             }
 
@@ -276,7 +305,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
             }
 
             val close = { sheet = Sheet.None }
-            GlassSheet(sheet == Sheet.Settings, close, solid = true) {
+            GlassSheet(sheet == Sheet.Settings, close, solid = true, dockToSide = true) {
                 SettingsSheet(
                     settings, account, vm::settingsAction,
                     onAccount = { sheet = Sheet.Account }, onBypass = { sheet = Sheet.Bypass },
@@ -286,7 +315,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     },
                 )
             }
-            GlassSheet(sheet == Sheet.Bypass, close, solid = true) {
+            GlassSheet(sheet == Sheet.Bypass, close, solid = true, dockToSide = true) {
                 val progress by vm.pickProgress.collectAsStateWithLifecycle()
                 val all by vm.networkResults.collectAsStateWithLifecycle()
                 val network by vm.network.collectAsStateWithLifecycle()
@@ -306,13 +335,13 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     onRestart = { container.bypass.restart() },
                 )
             }
-            GlassSheet(sheet == Sheet.Quality, close, solid = true) {
+            GlassSheet(sheet == Sheet.Quality, close, solid = true, dockToSide = true) {
                 QualitySheet(state, onQuality = { playback.setQuality(it) }, onSpeed = { sp ->
                     playback.setSpeed(sp)
                     if (settings.rememberSpeed) vm.settingsAction { setSpeed(sp) }
                 })
             }
-            GlassSheet(sheet == Sheet.Update, close, solid = true) {
+            GlassSheet(sheet == Sheet.Update, close, solid = true, dockToSide = true) {
                 UpdateSheet(
                     update,
                     onCheck = { vm.checkUpdate() },
@@ -324,7 +353,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                     },
                 )
             }
-            GlassSheet(sheet == Sheet.Account, close, solid = true) {
+            GlassSheet(sheet == Sheet.Account, close, solid = true, dockToSide = true) {
                 AccountSheet(
                     account, vm.importing, vm.importedCount,
                     onSignIn = {
@@ -373,9 +402,84 @@ fun Logo(size: Dp, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Логотип с названием. [compact] (боковая панель) — только «Tube»: «Player» плавно сжимается и исчезает;
+ * [animate] — положение экрана только что сменилось, и переход надо показать, а не начать сразу с конца.
+ */
+@Composable
+fun Brand(compact: Boolean, animate: Boolean, modifier: Modifier = Modifier) {
+    val player = remember { androidx.compose.animation.core.MutableTransitionState(if (animate) compact else !compact) }
+    player.targetState = !compact
+    val style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp)
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Logo(24.dp)
+        Spacer(Modifier.width(6.dp))
+        Text("Tube", style = style, color = TubeTheme.colors.textPrimary, maxLines = 1, softWrap = false)
+        AnimatedVisibility(
+            player,
+            enter = androidx.compose.animation.expandHorizontally(Anim.move(), expandFrom = Alignment.Start) + fadeIn(Anim.fade()),
+            exit = androidx.compose.animation.shrinkHorizontally(Anim.move(), shrinkTowards = Alignment.Start) + fadeOut(Anim.out()),
+        ) {
+            Text(" Player", style = style, color = TubeTheme.colors.textPrimary, maxLines = 1, softWrap = false)
+        }
+    }
+}
+
+/** Цвет точки обхода: фиолетовая — работает, жёлтая — проверяет, красная — ошибка, серая — выключен. */
+@Composable
+private fun bypassDot(bypass: BypassStatus): Color {
+    val colors = TubeTheme.colors
+    val dot by animateColorAsState(
+        when (bypass) {
+            is BypassStatus.Running -> when {
+                bypass.appOk == false -> colors.danger
+                bypass.check?.ok == false || bypass.appOk == null -> colors.warning
+                else -> colors.accent
+            }
+            BypassStatus.Starting -> colors.warning
+            is BypassStatus.Failed -> colors.danger
+            BypassStatus.Off -> colors.textTertiary
+        },
+        Anim.fade(),
+        label = "bypass",
+    )
+    return dot
+}
+
+/** Значок щита с точкой состояния обхода. */
+@Composable
+private fun BypassIcon(bypass: BypassStatus, icon: Dp = 24.dp) {
+    Box(Modifier.size(icon + 8.dp), contentAlignment = Alignment.Center) {
+        Icon(TubeIcons.Shield, null, tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(icon))
+        StatusDot(bypassDot(bypass), Modifier.align(Alignment.Center).padding(start = icon * 0.75f, bottom = icon * 0.75f))
+    }
+}
+
+/** Обход в верхней панели: щит с точкой состояния. */
+@Composable
+private fun BypassButton(bypass: BypassStatus, onClick: () -> Unit, size: Dp = 48.dp, icon: Dp = 24.dp) {
+    Box(
+        Modifier.size(size).bouncyClickable(pressedScale = 0.88f, onClick = onClick).semantics { contentDescription = "bypass" },
+        contentAlignment = Alignment.Center,
+    ) {
+        BypassIcon(bypass, icon)
+    }
+}
+
+/** Настройки: аватар аккаунта, если вошли, иначе шестерёнка. */
+@Composable
+private fun SettingsButton(account: com.tube.player.account.Account?, onClick: () -> Unit, size: Dp = 48.dp, icon: Dp = 24.dp) {
+    Box(Modifier.size(size).bouncyClickable(pressedScale = 0.88f, onClick = onClick), contentAlignment = Alignment.Center) {
+        if (account?.avatar != null) Avatar(account.avatar, icon + 4.dp)
+        else Icon(TubeIcons.Gear, tr("Настройки", "Settings"), tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(icon))
+    }
+}
+
 /** Верхняя панель как в YouTube: логотип с названием слева, значки 24dp справа; в поиске — поле на всю ширину. */
 @Composable
 private fun TopBar(
+    rail: Boolean,
+    railChanged: Boolean,
     searching: Boolean,
     query: String,
     onQuery: (String) -> Unit,
@@ -393,7 +497,9 @@ private fun TopBar(
         Modifier
             .fillMaxWidth()
             .background(colors.background.copy(alpha = 0.97f))
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            // Боком справа — боковая панель: верхняя заканчивается у неё.
+            .padding(end = if (rail) RailWidth else 0.dp),
     ) {
         Row(
             Modifier.fillMaxWidth().height(TopBarHeight).padding(horizontal = 4.dp),
@@ -407,11 +513,7 @@ private fun TopBar(
                 if (back) {
                     BarIcon(TubeIcons.Back, tr("Назад", "Back"), onBack)
                 } else {
-                    Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Logo(24.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Tube Player", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp), color = colors.textPrimary, maxLines = 1)
-                    }
+                    Brand(compact = false, animate = railChanged, modifier = Modifier.padding(start = 12.dp))
                 }
             }
             AnimatedContent(
@@ -462,29 +564,10 @@ private fun TopBar(
                 Spacer(Modifier.width(8.dp))
             } else {
                 Spacer(Modifier.weight(1f))
-                // Обход: значок щита с точкой — зелёная/фиолетовая работает, жёлтая проверяет, красная — ошибка.
-                Box(Modifier.size(48.dp).bouncyClickable(pressedScale = 0.88f, onClick = onBypass), contentAlignment = Alignment.Center) {
-                    Icon(TubeIcons.Shield, tr("Обход", "Unblocking"), tint = colors.textPrimary, modifier = Modifier.size(24.dp))
-                    val dot by animateColorAsState(
-                        when (bypass) {
-                            is BypassStatus.Running -> when {
-                                bypass.appOk == false -> colors.danger
-                                bypass.check?.ok == false || bypass.appOk == null -> colors.warning
-                                else -> colors.accent
-                            }
-                            BypassStatus.Starting -> colors.warning
-                            is BypassStatus.Failed -> colors.danger
-                            BypassStatus.Off -> colors.textTertiary
-                        },
-                        Anim.fade(),
-                        label = "bypass",
-                    )
-                    StatusDot(dot, Modifier.align(Alignment.TopEnd).padding(top = 11.dp, end = 11.dp))
-                }
-                BarIcon(TubeIcons.Search, tr("Поиск", "Search"), onOpenSearch)
-                Box(Modifier.size(48.dp).bouncyClickable(pressedScale = 0.88f, onClick = onSettings), contentAlignment = Alignment.Center) {
-                    if (account?.avatar != null) Avatar(account.avatar, 28.dp)
-                    else Icon(TubeIcons.Gear, tr("Настройки", "Settings"), tint = colors.textPrimary, modifier = Modifier.size(24.dp))
+                if (!rail) {
+                    BypassButton(bypass, onBypass)
+                    BarIcon(TubeIcons.Search, tr("Поиск", "Search"), onOpenSearch)
+                    SettingsButton(account, onSettings)
                 }
             }
             }
@@ -493,37 +576,134 @@ private fun TopBar(
     }
 }
 
-/** Значок 24dp в области касания 48dp — как кнопки панелей YouTube. */
+/** Значок 24dp в области касания 48dp — как кнопки панелей YouTube (в боковой панели — крупнее). */
 @Composable
-fun BarIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit, tint: Color = TubeTheme.colors.textPrimary) {
+fun BarIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    tint: Color = TubeTheme.colors.textPrimary,
+    size: Dp = 48.dp,
+    iconSize: Dp = 24.dp,
+) {
     Box(
-        Modifier.size(48.dp).bouncyClickable(pressedScale = 0.88f, onClick = onClick).semantics { contentDescription = description },
+        Modifier.size(size).bouncyClickable(pressedScale = 0.88f, onClick = onClick).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(iconSize))
     }
 }
 
-/** Вкладки столбиком слева — для планшета боком. */
+/**
+ * Боковая панель у правого края (планшет боком) во всю высоту вместо верхней панели: сверху логотип «Tube»
+ * (по нажатию — меню с обходом и настройками), под ним крупная кнопка поиска, линия и крупные вкладки,
+ * равномерно по оставшейся высоте.
+ */
 @Composable
-private fun NavRail(vm: MainViewModel, modifier: Modifier = Modifier) {
+private fun NavRail(
+    vm: MainViewModel,
+    railChanged: Boolean,
+    bypass: BypassStatus,
+    account: com.tube.player.account.Account?,
+    onSearch: () -> Unit,
+    onBypass: () -> Unit,
+    onSettings: () -> Unit,
+) {
     Column(
-        modifier
+        Modifier
             .fillMaxHeight()
             .background(TubeTheme.colors.background.copy(alpha = 0.97f))
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End))
             .width(RailWidth)
-            .padding(top = 8.dp),
+            .padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Tab.entries.forEach { tab -> TabButton(vm, tab, Modifier.fillMaxWidth().height(72.dp)) }
+        // Логотип — кнопка: маленькое меню с обходом и настройками (точка — состояние обхода).
+        BrandMenu(railChanged, bypass, account, onBypass, onSettings)
+        Spacer(Modifier.height(14.dp))
+        // Поиск — крупная кнопка на подложке; ниже — линия и вкладки.
+        Box(
+            Modifier
+                .size(64.dp)
+                .background(TubeTheme.colors.chip, androidx.compose.foundation.shape.CircleShape)
+                .bouncyClickable(pressedScale = 0.9f, onClick = onSearch)
+                .semantics { contentDescription = "search" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(TubeIcons.Search, null, tint = TubeTheme.colors.textPrimary, modifier = Modifier.size(32.dp))
+        }
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.width(48.dp).height(2.dp).background(TubeTheme.colors.textTertiary.copy(alpha = 0.35f), Shapes.Pill))
+        Column(
+            Modifier.weight(1f).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            Tab.entries.forEach { tab -> TabButton(vm, tab, Modifier.fillMaxWidth().height(96.dp), large = true) }
+        }
+    }
+}
+
+/** Логотип «Tube» в боковой панели: по нажатию — меню «Обход блокировок» и «Настройки». */
+@Composable
+private fun BrandMenu(
+    railChanged: Boolean,
+    bypass: BypassStatus,
+    account: com.tube.player.account.Account?,
+    onBypass: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val colors = TubeTheme.colors
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .bouncyClickable(pressedScale = 0.92f) { open = true }
+                .semantics { contentDescription = "menu" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Brand(compact = true, animate = railChanged, modifier = Modifier.wrapContentWidth(unbounded = true))
+        }
+        // Точка состояния обхода — у логотипа, а не у самого края экрана.
+        StatusDot(bypassDot(bypass), Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 6.dp))
+        androidx.compose.material3.DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            containerColor = colors.background,
+            offset = androidx.compose.ui.unit.DpOffset(0.dp, 4.dp),
+            shadowElevation = 8.dp,
+        ) {
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text(tr("Обход блокировок", "Unblocking"), style = MaterialTheme.typography.bodyLarge, color = colors.textPrimary) },
+                leadingIcon = { BypassIcon(bypass) },
+                onClick = {
+                    open = false
+                    onBypass()
+                },
+            )
+            androidx.compose.material3.DropdownMenuItem(
+                text = { Text(tr("Настройки", "Settings"), style = MaterialTheme.typography.bodyLarge, color = colors.textPrimary) },
+                leadingIcon = {
+                    Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                        if (account?.avatar != null) Avatar(account.avatar, 28.dp)
+                        else Icon(TubeIcons.Gear, null, tint = colors.textPrimary, modifier = Modifier.size(24.dp))
+                    }
+                },
+                onClick = {
+                    open = false
+                    onSettings()
+                },
+            )
+        }
     }
 }
 
 /** Вкладка: значок в подсвеченной капсуле и подпись; выбранная — цвета акцента и чуть крупнее. */
 @Composable
-private fun TabButton(vm: MainViewModel, tab: Tab, modifier: Modifier) {
+private fun TabButton(vm: MainViewModel, tab: Tab, modifier: Modifier, large: Boolean = false) {
     val colors = TubeTheme.colors
     val selected = vm.tab == tab
     val tint by animateColorAsState(if (selected) colors.textPrimary else colors.textSecondary, Anim.fade(), label = "tab")
@@ -538,7 +718,7 @@ private fun TabButton(vm: MainViewModel, tab: Tab, modifier: Modifier) {
         val pill by animateColorAsState(if (selected) colors.accent.copy(alpha = 0.16f) else Color.Transparent, Anim.fade(), label = "tabPill")
         Box(
             Modifier
-                .size(width = 56.dp, height = 28.dp)
+                .size(width = if (large) 64.dp else 56.dp, height = if (large) 36.dp else 28.dp)
                 .background(pill, Shapes.Pill),
             contentAlignment = Alignment.Center,
         ) {
@@ -550,16 +730,17 @@ private fun TabButton(vm: MainViewModel, tab: Tab, modifier: Modifier) {
                 },
                 null,
                 tint = if (selected) colors.accent else tint,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(if (large) 28.dp else 24.dp),
             )
         }
+        if (large) Spacer(Modifier.height(4.dp))
         Text(
             when (tab) {
                 Tab.Home -> tr("Главная", "Home")
                 Tab.Subscriptions -> tr("Подписки", "Subscriptions")
                 Tab.Library -> tr("Вы", "You")
             },
-            style = MaterialTheme.typography.labelMedium,
+            style = if (large) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium,
             color = tint,
             maxLines = 1,
         )
@@ -572,11 +753,13 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
     val colors = TubeTheme.colors
     val playback = vm.container.playback
     val progress = rememberProgress(if (hasMini) playback.player else null)
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        // Планшет: мини-плеер — скруглённая карточка с полями, как карточки ленты; телефон — полоса во всю ширину.
+        val card = maxWidth >= 600.dp
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = if (rail) RailWidth else 0.dp)
+                .padding(end = if (rail) RailWidth else 0.dp)
                 .background(colors.background.copy(alpha = 0.97f))
                 .then(if (rail) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)) else Modifier),
         ) {
@@ -586,7 +769,18 @@ private fun BottomArea(vm: MainViewModel, state: com.tube.player.player.Playback
                 enter = slideInVertically(Anim.move()) { it / 2 } + fadeIn(Anim.fade()),
                 exit = slideOutVertically(Anim.move()) { it } + fadeOut(Anim.out()),
             ) {
-                Column {
+                Column(
+                    if (card) {
+                        Modifier
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                            // Непрозрачная: лента под ней не просвечивает.
+                            .background(colors.background)
+                            .background(colors.chip)
+                    } else {
+                        Modifier
+                    },
+                ) {
                     MiniPlayer(
                         state, progress.playing, playback.player, progress.aspect,
                         onExpand = { vm.playerExpanded = true },

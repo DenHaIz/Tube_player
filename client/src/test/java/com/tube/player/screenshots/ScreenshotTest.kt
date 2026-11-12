@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
@@ -152,12 +153,16 @@ class ScreenshotTest {
                 TubeTheme(darkTheme = dark, amoled = amoled, palette = TubePalette.Violet) { PlayerShell(vm, noActions, pip = false, fullscreen = false, initialSheet = sheet) }
             }
         }
-        // Статус-бар 40dp и жестовая панель 16dp, как на современном телефоне.
+        // Системные панели как на настоящем устройстве: телефон — строка состояния 40dp и жестовая панель 16dp,
+        // планшет — 24dp и 20dp (в dp, а не в пикселях: иначе на xhdpi-планшете сверху выходила лишняя пустота).
         compose.runOnUiThread {
             val content = compose.activity.findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
+            val metrics = compose.activity.resources.displayMetrics
+            val tablet = compose.activity.resources.configuration.let { minOf(it.screenWidthDp, it.screenHeightDp) } >= 600
+            fun dp(v: Int) = (v * metrics.density).toInt()
             val insets = WindowInsetsCompat.Builder()
-                .setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, 120, 0, 0))
-                .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, 48))
+                .setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, dp(if (tablet) 24 else 40), 0, 0))
+                .setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, dp(if (tablet) 20 else 16)))
                 .build()
             ViewCompat.dispatchApplyWindowInsets(content, insets)
         }
@@ -235,6 +240,97 @@ class ScreenshotTest {
             vm.playerExpanded = false
         }
         shot("home_tablet_mini")
+    }
+
+    // Планшет: стоя (800×1280) и боком (1280×800).
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tabletPortraitHome() {
+        render { vm ->
+            compose.runOnUiThread { app.container.playback.preview(PlaybackState(item = videos()[1])) }
+            vm.playerExpanded = false
+        }
+        shot("tablet_port_home")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tabletPortraitVideo() {
+        render(dark = true) { vm -> openVideo(vm) }
+        shot("tablet_port_video")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tabletPortraitSettings() {
+        render(sheet = Sheet.Settings)
+        shot("tablet_port_settings")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-xhdpi")
+    fun tabletPortraitComments() = comments(amoled = false, name = "tablet_port_comments")
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandMenu() {
+        render()
+        compose.onNodeWithContentDescription("menu").performClick()
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(600)
+        shot("tablet_land_menu")
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandSettings() {
+        render(sheet = Sheet.Settings)
+        shot("tablet_land_settings")
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandQuality() {
+        render(dark = true, sheet = Sheet.Quality) { vm -> openVideo(vm) }
+        shot("tablet_land_quality")
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandComments() = comments(amoled = true, name = "tablet_land_comments")
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandSearch() {
+        render { vm ->
+            vm.preloadSearch("lofi", videos().drop(1) + listOf<FeedItem>(ChannelItem("https://www.youtube.com/channel/UCx", "Chill Beats", "https://yt3/x", 2_400_000)))
+            vm.push(Route.Search)
+        }
+        shot("tablet_land_search")
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandLibrary() {
+        render(dark = true) { vm ->
+            videos(5).forEachIndexed { i, v ->
+                app.container.library.watched(v)
+                if (i % 2 == 0) app.container.library.savePosition(v.id, 200_000L + i * 50_000, 900_000)
+            }
+            vm.selectTab(Tab.Library)
+        }
+        shot("tablet_land_library")
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    fun tabletLandChannel() {
+        render { vm ->
+            val url = "https://www.youtube.com/channel/UC0"
+            vm.preloadChannel(url, ChannelItem(url, "Наука просто", "https://yt3/a0", 1_840_000, "Объясняем сложное простыми словами."), videos())
+            vm.push(Route.Channel(url, "Наука просто"))
+        }
+        shot("tablet_land_channel")
     }
 
     @Test

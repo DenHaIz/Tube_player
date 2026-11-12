@@ -11,8 +11,8 @@ android {
         applicationId = "com.tube.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.4.3.1"
+        versionCode = 9
+        versionName = "0.4.4"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
@@ -21,19 +21,19 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Подпись debug-ключом общего тулчейна — как у Tube.
+            // РџРѕРґРїРёСЃСЊ debug-РєР»СЋС‡РѕРј РѕР±С‰РµРіРѕ С‚СѓР»С‡РµР№РЅР° вЂ” РєР°Рє Сѓ Tube.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
 
     packaging {
-        // libbyedpi.so — исполняемый файл: он должен лежать распакованным в nativeLibraryDir.
+        // libbyedpi.so вЂ” РёСЃРїРѕР»РЅСЏРµРјС‹Р№ С„Р°Р№Р»: РѕРЅ РґРѕР»Р¶РµРЅ Р»РµР¶Р°С‚СЊ СЂР°СЃРїР°РєРѕРІР°РЅРЅС‹Рј РІ nativeLibraryDir.
         jniLibs.useLegacyPackaging = true
         resources.excludes += listOf("META-INF/*.kotlin_module", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 
     compileOptions {
-        // NewPipeExtractor пользуется API Java 11 (java.time, List.of, String.isBlank…).
+        // NewPipeExtractor РїРѕР»СЊР·СѓРµС‚СЃСЏ API Java 11 (java.time, List.of, String.isBlankвЂ¦).
         isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -50,7 +50,7 @@ android {
             test.maxHeapSize = "2g"
             if (project.hasProperty("network")) test.systemProperty("network", "true")
             test.testLogging { showStandardStreams = project.hasProperty("network") }
-            // Скриншоты (Robolectric) — только по запросу: gradlew :client:testDebugUnitTest -Pscreenshots
+            // РЎРєСЂРёРЅС€РѕС‚С‹ (Robolectric) вЂ” С‚РѕР»СЊРєРѕ РїРѕ Р·Р°РїСЂРѕСЃСѓ: gradlew :client:testDebugUnitTest -Pscreenshots
             if (project.hasProperty("screenshots")) {
                 test.systemProperty("roborazzi.test.record", "true")
                 test.systemProperty("robolectric.pixelCopyRenderMode", "hardware")

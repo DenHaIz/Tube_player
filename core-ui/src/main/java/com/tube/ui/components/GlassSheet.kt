@@ -2,6 +2,11 @@ package com.tube.ui.components
 
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -65,17 +70,39 @@ import kotlinx.coroutines.launch
 private const val SheetExitMs = 400
 private val SheetExitEasing = CubicBezierEasing(0.35f, 0f, 0.65f, 1f)
 private val MaxSheetWidth = 640.dp
+/** С какой ширины (в горизонтальном виде) лист становится боковой панелью. */
+private val SideMinWidth = 840.dp
 
 /**
  * Стеклянный лист поверх экрана. Появляется, «вырастая» снизу,
  * закрывается свайпом вниз, тапом по фону или жестом «назад» с предпросмотром.
  * [solid] — непрозрачный лист (как в YouTube): содержимое экрана под ним не просвечивает.
+ * [dockToSide] — на широком экране боком (планшет) лист становится панелью у правого края во всю высоту:
+ * снизу по центру он оставлял по бокам пустые поля и был низким. Панель выезжает справа и закрывается свайпом вправо.
  */
 @Composable
 fun GlassSheet(
     visible: Boolean,
     onDismiss: () -> Unit,
     solid: Boolean = false,
+    dockToSide: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val side = dockToSide && maxWidth >= SideMinWidth && maxWidth > maxHeight
+        // Ширина панели: ~38% экрана, но не уже 380dp и не шире 480dp.
+        val sideWidth = (maxWidth * 0.38f).coerceIn(380.dp, 480.dp)
+        SheetBody(visible, onDismiss, solid, side, sideWidth, content)
+    }
+}
+
+@Composable
+private fun SheetBody(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    solid: Boolean,
+    side: Boolean,
+    sideWidth: androidx.compose.ui.unit.Dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = TubeTheme.colors
@@ -91,13 +118,25 @@ fun GlassSheet(
     AnimatedVisibility(
         visible = visible,
         modifier = Modifier.fillMaxSize(),
-        enter = slideInVertically(Motion.soft()) { it / 3 } +
-            scaleIn(Motion.soft(), initialScale = 0.82f, transformOrigin = TransformOrigin(0.5f, 1f)) +
-            fadeIn(Motion.snappy()),
-        exit = slideOutVertically(tween(SheetExitMs, easing = SheetExitEasing)) { it } +
-            scaleOut(tween(SheetExitMs, easing = SheetExitEasing), targetScale = 0.9f, transformOrigin = TransformOrigin(0.5f, 1f)) +
-            fadeOut(tween(SheetExitMs - 120, delayMillis = 120)),
+        enter = if (side) {
+            slideInHorizontally(Motion.soft()) { it } + fadeIn(Motion.snappy())
+        } else {
+            slideInVertically(Motion.soft()) { it / 3 } +
+                scaleIn(Motion.soft(), initialScale = 0.82f, transformOrigin = TransformOrigin(0.5f, 1f)) +
+                fadeIn(Motion.snappy())
+        },
+        exit = if (side) {
+            slideOutHorizontally(tween(SheetExitMs - 80, easing = SheetExitEasing)) { it } + fadeOut(tween(SheetExitMs - 80))
+        } else {
+            slideOutVertically(tween(SheetExitMs, easing = SheetExitEasing)) { it } +
+                scaleOut(tween(SheetExitMs, easing = SheetExitEasing), targetScale = 0.9f, transformOrigin = TransformOrigin(0.5f, 1f)) +
+                fadeOut(tween(SheetExitMs - 120, delayMillis = 120))
+        },
     ) {
+        if (side) {
+            SidePanel(visible, onDismiss, solid, sideWidth, content)
+            return@AnimatedVisibility
+        }
         // Сдвиг листа вниз пальцем; анимация — только при отпускании.
         var drag by remember { mutableFloatStateOf(0f) }
         var backProgress by remember { mutableFloatStateOf(0f) }
@@ -228,6 +267,84 @@ fun GlassSheet(
                 }
                 content()
             }
+        }
+    }
+}
+
+/**
+ * Лист-панель у правого края во всю высоту (планшет боком). Внутри — тот же контент, прокрутка — вертикальная,
+ * поэтому закрывается свайпом вправо (за любое место без прокрутки), тапом по фону или «назад».
+ */
+@Composable
+private fun SidePanel(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    solid: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = TubeTheme.colors
+    var drag by remember { mutableFloatStateOf(0f) }
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val dismissDistance = with(LocalDensity.current) { 110.dp.toPx() }
+    val flingDistance = with(LocalDensity.current) { 28.dp.toPx() }
+    val currentDismiss by rememberUpdatedState(onDismiss)
+    fun settle(velocity: Float) {
+        if (drag > dismissDistance || (velocity > 1600f && drag > flingDistance)) {
+            currentDismiss()
+        } else {
+            scope.launch { animate(drag, 0f, animationSpec = Motion.bouncy()) { v, _ -> drag = v } }
+        }
+    }
+    PredictiveBackHandler(enabled = visible) { events ->
+        try {
+            events.collect { backProgress = it.progress }
+            onDismiss()
+        } catch (e: CancellationException) {
+            backProgress = 0f
+            throw e
+        }
+    }
+    val shape = RoundedCornerShape(topStart = 28.dp, bottomStart = 28.dp)
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
+        Column(
+            Modifier
+                .graphicsLayer {
+                    translationX = drag
+                    val s = 1f - backProgress * 0.06f
+                    scaleX = s
+                    scaleY = s
+                    transformOrigin = TransformOrigin(1f, 0.5f)
+                }
+                .fillMaxHeight()
+                .width(width)
+                .then(
+                    if (solid) {
+                        Modifier.background(colors.background, shape).glassRim(shape, colors.glassStroke).clip(shape)
+                    } else {
+                        Modifier.liquidGlass(shape, tint = colors.background.copy(alpha = if (colors.isDark) 0.74f else 0.66f))
+                    },
+                )
+                .then(if (visible) Modifier.clickable(interactionSource = null, indication = null) { } else Modifier)
+                .pointerInput(Unit) {
+                    val tracker = VelocityTracker()
+                    detectHorizontalDragGestures(
+                        onDragStart = { tracker.resetTracking() },
+                        onDragEnd = { settle(tracker.calculateVelocity().x) },
+                        onDragCancel = { settle(0f) },
+                    ) { change, dx ->
+                        tracker.addPosition(change.uptimeMillis, change.position)
+                        change.consume()
+                        drag = (drag + dx).coerceAtLeast(0f)
+                    }
+                }
+                // Сверху и снизу — системные панели, справа — вырез камеры: содержимое не заходит под них.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.End))
+                .imePadding()
+                .padding(top = 12.dp),
+        ) {
+            content()
         }
     }
 }

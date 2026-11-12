@@ -80,7 +80,8 @@ class PlayerController(
         // Старт после ~1 с буфера (по умолчанию 2,5 с), после остановки — 2 с; дальше копим до 50 с.
         .setLoadControl(
             androidx.media3.exoplayer.DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 50_000, 1_000, 2_000)
+                // Слабое устройство (мало памяти) — копим не больше 30 с, чтобы не вытеснять остальное из памяти.
+                .setBufferDurationsMs(15_000, if (lowRam(context)) 30_000 else 50_000, 1_000, 2_000)
                 .setPrioritizeTimeOverSizeThresholds(true)
                 .build(),
         )
@@ -90,6 +91,13 @@ class PlayerController(
         .setSeekBackIncrementMs(10_000)
         .setSeekForwardIncrementMs(10_000)
         .build()
+        .also {
+            // «Авто» не выбирает качество выше разрешения экрана: 1440p/4K на экране 1080p только нагружают
+            // декодер и сеть — на нестаром телефоне это рывки. Выбранное вручную качество не ограничивается.
+            it.trackSelectionParameters = it.trackSelectionParameters.buildUpon()
+                .setViewportSizeToPhysicalDisplaySize(context, true)
+                .build()
+        }
 
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -347,6 +355,10 @@ class PlayerController(
 }
 
 private const val POPUP_HANDOVER_MS = 220L
+
+/** Устройство с малым объёмом памяти (система так помечает телефоны до ~2 ГБ). */
+private fun lowRam(context: android.content.Context): Boolean =
+    context.getSystemService(android.app.ActivityManager::class.java)?.isLowRamDevice == true
 
 /** Подписи качества: «1080p», «720p60». */
 fun qualityLabel(height: Int, fps: Int = 0) = if (fps > 30) "${height}p$fps" else "${height}p"

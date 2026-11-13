@@ -29,9 +29,14 @@ data class NetworkResults(
     val chosen: String? = null,
     /** Настоящий видеоузел сети (rrN---sn-….googlevideo.com), найденный при подборе. */
     val videoHost: String? = null,
+    /** Когда сторож последний раз видел стратегию работающей в живом трафике (id → мс). */
+    val lastGood: Map<String, Long> = emptyMap(),
 ) {
     val ranking: List<StrategyScore> get() = StrategyTester.rank(scores.values.toList())
     val working: List<StrategyScore> get() = ranking.filter { it.works }
+
+    /** Рабочие, проверенные не раньше [maxAgeMs] назад: старые итоги в другой день могут уже не соответствовать сети. */
+    fun workingSince(now: Long, maxAgeMs: Long): List<StrategyScore> = working.filter { now - it.at <= maxAgeMs }
 }
 
 /**
@@ -107,6 +112,7 @@ class ResultsStore(context: Context) {
             n.systemDns?.let { put("systemDns", it) }
             n.chosen?.let { put("chosen", it) }
             n.videoHost?.let { put("videoHost", it) }
+            if (n.lastGood.isNotEmpty()) put("lastGood", JSONObject().apply { n.lastGood.forEach { (id, at) -> put(id, at) } })
             n.baseline?.let { put("baseline", encodeScore(it)) }
             put("scores", JSONArray().apply { n.scores.values.forEach { put(encodeScore(it)) } })
         }
@@ -116,11 +122,13 @@ class ResultsStore(context: Context) {
             put("name", s.strategy.name)
             put("args", s.strategy.args)
             s.startError?.let { put("startError", it) }
+            put("at", s.at)
             put("results", JSONArray().apply {
                 s.results.forEach { r ->
                     put(JSONObject().apply {
                         put("host", r.probe.host)
-                        put("path", r.probe.path)
+                        // Ссылка на видеопоток подписана и живёт часы — её не храним.
+                        put("path", if ("videoplayback" in r.probe.path) r.probe.path.substringBefore('?') else r.probe.path)
                         put("min", r.probe.minBytes)
                         put("kind", r.probe.kind.name)
                         put("ok", r.ok)
@@ -133,21 +141,24 @@ class ResultsStore(context: Context) {
         }
 
         internal fun decodeNetwork(o: JSONObject): NetworkResults {
-            val scores = o.optJSONArray("scores")?.let { arr -> (0 until arr.length()).map { decodeScore(arr.getJSONObject(it)) } }.orEmpty()
+            val lastGood = o.optJSONObject("lastGood")?.let { g -> g.keys().asSequence().associateWith { g.optLong(it) } }.orEmpty()
             if (o.optInt("probeVersion") < PROBE_VERSION) {
-                return NetworkResults(chosen = o.optString("chosen").ifEmpty { null })
+                return NetworkResults(chosen = o.optString("chosen").ifEmpty { null }, lastGood = lastGood)
             }
+            val testedAt = o.optLong("testedAt")
             return NetworkResults(
-                testedAt = o.optLong("testedAt"),
+                testedAt = testedAt,
                 systemDns = if (o.has("systemDns")) o.getBoolean("systemDns") else null,
-                baseline = o.optJSONObject("baseline")?.let(::decodeScore),
-                scores = scores.associateBy { it.strategy.id },
+                baseline = o.optJSONObject("baseline")?.let { decodeScore(it, testedAt) },
+                // Записи без времени — из прошлых версий: считаем, что проверены вместе с подбором.
+                scores = o.optJSONArray("scores")?.let { arr -> (0 until arr.length()).map { decodeScore(arr.getJSONObject(it), testedAt) } }.orEmpty().associateBy { it.strategy.id },
                 chosen = o.optString("chosen").ifEmpty { null },
                 videoHost = o.optString("videoHost").ifEmpty { null },
+                lastGood = lastGood,
             )
         }
 
-        private fun decodeScore(o: JSONObject): StrategyScore {
+        private fun decodeScore(o: JSONObject, testedAt: Long): StrategyScore {
             val id = o.getString("id")
             // Встроенная стратегия берётся из текущей версии приложения (описания могли обновиться).
             val strategy = Strategies.byId(id) ?: Strategy(id, o.optString("name", id), o.optString("args"), "", "")
@@ -163,7 +174,7 @@ class ResultsStore(context: Context) {
                     )
                 }
             }.orEmpty()
-            return StrategyScore(strategy, results, o.optString("startError").ifEmpty { null })
+            return StrategyScore(strategy, results, o.optString("startError").ifEmpty { null }, at = o.optLong("at", testedAt))
         }
     }
 }

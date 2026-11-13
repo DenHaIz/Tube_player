@@ -20,6 +20,25 @@ class LocalDnsParseTest {
         assertEquals(listOf("142.250.74.46", "142.250.74.78"), addresses)
     }
 
+    /** Запрос с другими флагами и лишними записями даёт тот же ключ кэша, что обычный; битые — отбрасываются. */
+    @Test
+    fun canonicalQueryIgnoresFlagsAndExtraRecords() {
+        val plain = LocalDns.aQuery("www.youtube.com")
+        val odd = plain.copyOf().also {
+            it[0] = 0x12; it[1] = 0x34
+            it[2] = 0 // RD = 0
+            it[11] = 1 // ARCOUNT = 1 (EDNS)
+        } + byteArrayOf(0, 0, 41, 4, 208.toByte(), 0, 0, 0, 0, 0, 0)
+        val a = LocalDns.canonical(plain)!!
+        val b = LocalDns.canonical(odd)!!
+        assertTrue(a.contentEquals(b))
+        assertTrue(a.contentEquals(plain))
+        assertEquals(null, LocalDns.canonical(plain.copyOf(plain.size - 2)))
+        assertEquals(null, LocalDns.canonical(plain.copyOf().also { it[5] = 2 }))
+        assertEquals(null, LocalDns.canonical(plain.copyOf().also { it[2] = 0x81.toByte() }))
+        assertEquals(null, LocalDns.canonical(plain.copyOf().also { it[12] = 0xC0.toByte() }))
+    }
+
     @Test
     fun errorResponseGivesNothing() {
         val servFail = LocalDns.servFail(LocalDns.aQuery("example.com"))!!

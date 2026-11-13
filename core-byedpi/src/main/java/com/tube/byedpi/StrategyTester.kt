@@ -2,6 +2,12 @@ package com.tube.byedpi
 
 import android.content.Context
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -30,13 +36,19 @@ enum class ProbeKind {
     ChromeHello,
 }
 
-/** Что проверяем: узел, путь, сколько байт должно прийти; [group] — для экрана (сайт, превью, видео). */
+/**
+ * Что проверяем: узел, путь, сколько байт должно прийти; [group] — для экрана (сайт, превью, видео).
+ * [post] — POST с телом `x\0` (так видеоузлы отдают потоки клиентов Android/iOS/visionOS), [headers] — свои заголовки
+ * (User-Agent клиента, для которого выдана ссылка).
+ */
 data class Probe(
     val host: String,
     val path: String,
     val minBytes: Int,
     val kind: ProbeKind = ProbeKind.Https,
     val group: ProbeGroup = ProbeGroup.of(host),
+    val post: Boolean = false,
+    val headers: Map<String, String> = emptyMap(),
 )
 
 enum class ProbeGroup {
@@ -53,7 +65,8 @@ enum class ProbeGroup {
 
 data class ProbeResult(val probe: Probe, val ok: Boolean, val millis: Long, val bytes: Int, val error: String?)
 
-data class StrategyScore(val strategy: Strategy, val results: List<ProbeResult>, val startError: String? = null) {
+/** Итог проверки стратегии; [at] — когда проверяли (мс), 0 — неизвестно (старые записи). */
+data class StrategyScore(val strategy: Strategy, val results: List<ProbeResult>, val startError: String? = null, val at: Long = System.currentTimeMillis()) {
     val passed: Int get() = results.count { it.ok }
     val total: Int get() = results.size
     val avgMillis: Long get() = results.filter { it.ok }.map { it.millis }.average().takeIf { !it.isNaN() }?.toLong() ?: Long.MAX_VALUE
@@ -87,8 +100,8 @@ class StrategyTester(
                     gate.withPermit {
                         testOne(strategy, probes, blockUdp)
                     }.also { score ->
-                        synchronized(this@StrategyTester) { done++ }
-                        send(TestEvent.Progress(done, strategies.size, score))
+                        val n = synchronized(this@StrategyTester) { ++done }
+                        send(TestEvent.Progress(n, strategies.size, score))
                     }
                 }
             }.awaitAll()
@@ -124,12 +137,31 @@ class StrategyTester(
         if (proxy == null) return StrategyScore(strategy, emptyList(), lastError?.message ?: "start failed")
         val port = proxy.port
         try {
-            val results = coroutineScope {
-                probes.map { probe -> async { probe(port, probe) } }.awaitAll()
+            val results = withProcess(proxy) {
+                probes.map { probe -> async(Dispatchers.IO) { probe(port, probe) } }.awaitAll()
             }
             return StrategyScore(strategy, results)
         } finally {
             withContext(NonCancellable + Dispatchers.IO) { proxy.stop() }
+        }
+    }
+
+    /**
+     * [block] с работающим [proxy]; при отмене процесс гасится сразу — заблокированные чтения сокетов обрываются,
+     * и отмена (кнопка «Стоп», найденная замена) не ждёт тайм-аутов проверок.
+     */
+    private suspend fun <T> withProcess(proxy: ByeDpiProcess, block: suspend CoroutineScope.() -> T): T = coroutineScope {
+        val killer = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) { proxy.stop() }
+            }
+        }
+        try {
+            block()
+        } finally {
+            killer.cancel()
         }
     }
 
@@ -148,7 +180,16 @@ class StrategyTester(
         val target = maxOf(probe.minBytes, 1)
         return try {
             val bytes = when (probe.kind) {
-                ProbeKind.Https -> httpsGet(port, probe.host, probe.path, target, timeoutMs).size
+                ProbeKind.Https -> {
+                    val data = httpsGet(port, probe.host, probe.path, target, timeoutMs, probe.post, probe.headers)
+                    // Ссылка на поток устарела или не для этого адреса (403/410): TLS и ответ узла прошли — судим по ним,
+                    // а не считаем стратегию сломанной (иначе смена IP «ломала» бы все стратегии подряд).
+                    if (probe.post && statusOf(data) in 400..499) {
+                        val ok = data.size >= STALE_LINK_MIN_BYTES
+                        return ProbeResult(probe, ok, (System.nanoTime() - started) / 1_000_000, data.size, "stale link ${statusOf(data)}")
+                    }
+                    data.size
+                }
                 // Chrome переставляет расширения в каждом соединении, и SNI оказывается то в начале, то во втором
                 // TCP-сегменте. Стратегия должна пропускать все варианты, иначе в YouTube она сработает через раз.
                 ProbeKind.ChromeHello -> coroutineScope {
@@ -173,15 +214,37 @@ class StrategyTester(
      * Ссылка есть на странице просмотра; страница читается через первую сработавшую стратегию из [candidates].
      */
     suspend fun discoverVideoHost(candidates: List<Strategy>, blockUdp: Boolean): String? = withContext(Dispatchers.IO) {
-        for (strategy in candidates.take(DISCOVERY_ATTEMPTS)) {
+        // По DISCOVERY_PARALLEL стратегий сразу: раньше — по одной, до 8 × 14 с ожидания на сломанной сети.
+        for (wave in candidates.take(DISCOVERY_ATTEMPTS).chunked(DISCOVERY_PARALLEL)) {
             ensureActive()
-            val argv = (StrategyArgs.parse(strategy.args) as? StrategyArgs.Result.Ok)?.argv ?: continue
-            val proxy = runCatching { ByeDpiProcess.start(context, ByeDpiProcess.freePort(), argv, blockUdp, fakeSni) }.getOrNull() ?: continue
-            try {
-                runCatching { findVideoHost(proxy.port, timeoutMs * 2) }.getOrNull()?.let { return@withContext it }
-            } finally {
-                proxy.stop()
+            // Первый найденный узел — сразу; остальные попытки отменяются (их byedpi гасится, чтения обрываются).
+            val found = coroutineScope {
+                val first = CompletableDeferred<String?>()
+                val attempts = wave.map { strategy ->
+                    launch {
+                        val argv = (StrategyArgs.parse(strategy.args) as? StrategyArgs.Result.Ok)?.argv ?: return@launch
+                        val proxy = try {
+                            withContext(NonCancellable) { ByeDpiProcess.start(context, ByeDpiProcess.freePort(), argv, blockUdp, fakeSni) }
+                        } catch (_: Exception) {
+                            return@launch
+                        }
+                        try {
+                            val host = withProcess(proxy) {
+                                withContext(Dispatchers.IO) { runCatching { findVideoHost(proxy.port, timeoutMs * 2) }.getOrNull() }
+                            }
+                            if (host != null) first.complete(host)
+                        } finally {
+                            withContext(NonCancellable) { proxy.stop() }
+                        }
+                    }
+                }
+                launch {
+                    attempts.joinAll()
+                    first.complete(null)
+                }
+                first.await().also { coroutineContext.cancelChildren() }
             }
+            if (found != null) return@withContext found
         }
         null
     }
@@ -205,6 +268,12 @@ class StrategyTester(
 
         private const val CHROME_TEMPLATE = "fake/tls_clienthello_vk_com_kyber.bin"
         private const val DISCOVERY_ATTEMPTS = 8
+        private const val DISCOVERY_PARALLEL = 4
+        private const val STALE_LINK_MIN_BYTES = 12
+
+        /** Код ответа HTTP из первой строки; -1 — не HTTP. */
+        fun statusOf(response: ByteArray): Int =
+            String(response, 0, minOf(response.size, 64), Charsets.ISO_8859_1).substringBefore('\r').split(' ').getOrNull(1)?.toIntOrNull() ?: -1
         private const val START_ATTEMPTS = 3
         private val HelloOrders = listOf(ChromeHello.Order.SniLast, ChromeHello.Order.SniFirst, ChromeHello.Order.Random)
         private const val FALLBACK_VIDEO_HOST = "redirector.googlevideo.com"
@@ -228,6 +297,20 @@ class StrategyTester(
                 Probe("i.ytimg.com", "", minBytes = CHROME_MIN_BYTES, kind = ProbeKind.ChromeHello),
                 Probe(video, if (videoHost != null) "/generate_204" else "/report_mapping?di=no", minBytes = 12),
                 Probe(video, "", minBytes = CHROME_MIN_BYTES, kind = ProbeKind.ChromeHello),
+            )
+        }
+
+        /**
+         * Проверки для встроенного прокси (Tube Player): приложение ходит своим TLS (Conscrypt, как и эти пробы),
+         * Chrome-ClientHello ему не нужен. Сайт (страница ≥ 48 КБ — видно замирание после ~16 КБ), превью и видеоузел.
+         * [video] — проверка настоящим видеопотоком (≥ 128 КБ), если приложение её дало; иначе — ответ видеоузла.
+         */
+        fun appProbes(videoHost: String? = null, video: Probe? = null): List<Probe> {
+            val host = video?.host ?: videoHost ?: FALLBACK_VIDEO_HOST
+            return listOf(
+                Probe("www.youtube.com", "/", minBytes = 48 * 1024),
+                Probe("i.ytimg.com", "/vi/jNQXAC9IVRw/hqdefault.jpg", minBytes = 8 * 1024),
+                video ?: Probe(host, if (host != FALLBACK_VIDEO_HOST) "/generate_204" else "/report_mapping?di=no", minBytes = 12),
             )
         }
 
@@ -274,17 +357,19 @@ class StrategyTester(
             raw.use {
                 val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, "www.youtube.com", 443, true) as SSLSocket
                 tls.use {
+                    tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
                     tls.soTimeout = timeoutMs
                     tls.startHandshake()
                     tls.outputStream.apply {
                         write(httpRequest("www.youtube.com", WATCH_PATH).toByteArray())
                         flush()
                     }
+                    val deadline = System.nanoTime() + timeoutMs * 2_000_000L
                     val input = tls.inputStream
                     val buffer = ByteArray(32 * 1024)
                     var tail = ""
                     var read = 0
-                    while (read < WATCH_MAX_BYTES) {
+                    while (read < WATCH_MAX_BYTES && System.nanoTime() < deadline) {
                         val n = input.read(buffer)
                         if (n < 0) break
                         read += n
@@ -304,17 +389,29 @@ class StrategyTester(
         fun rank(scores: List<StrategyScore>): List<StrategyScore> =
             scores.sortedWith(compareByDescending<StrategyScore> { it.passed }.thenBy { it.avgMillis })
 
-        private fun httpRequest(host: String, path: String): String = listOf(
-            "GET $path HTTP/1.1",
-            "Host: $host",
-            // Десктопный браузер: с мобильным UA youtube.com сразу уводит на m.youtube.com коротким 302.
-            "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept: */*",
-            "Accept-Language: ru-RU,ru;q=0.9,en;q=0.8",
-            "Connection: close",
-            "",
-            "",
-        ).joinToString(CRLF)
+        private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+        /** Тело POST видеоузлу — как у NewPipe/YouTube. */
+        private val PostBody = byteArrayOf(0x78, 0)
+
+        fun httpRequest(host: String, path: String, post: Boolean = false, headers: Map<String, String> = emptyMap()): String {
+            // Перевод строки в заголовке или пути — подмена запроса: такие не отправляем.
+            require(path.none { it == '\r' || it == '\n' || it == ' ' }) { "bad path" }
+            val extra = headers.filter { (k, v) -> k.isNotEmpty() && k.none { it == '\r' || it == '\n' || it == ':' } && v.none { it == '\r' || it == '\n' } }
+            return buildList {
+                add("${if (post) "POST" else "GET"} $path HTTP/1.1")
+                add("Host: $host")
+                // Десктопный браузер: с мобильным UA youtube.com сразу уводит на m.youtube.com коротким 302.
+                if (extra.keys.none { it.equals("User-Agent", ignoreCase = true) }) add("User-Agent: $DESKTOP_UA")
+                extra.forEach { (k, v) -> add("$k: $v") }
+                add("Accept: */*")
+                add("Accept-Language: ru-RU,ru;q=0.9,en;q=0.8")
+                if (post) add("Content-Length: ${PostBody.size}")
+                add("Connection: close")
+                add("")
+                add("")
+            }.joinToString(CRLF)
+        }
 
         private const val CRLF = "\r\n"
         private const val MAX_REDIRECTS = 3
@@ -324,13 +421,16 @@ class StrategyTester(
          * читает не больше [maxBytes] (ответ вместе с заголовками). Если поток оборвался или замер
          * после первых байт, возвращает то, что успело прийти, — так видно замедление.
          */
-        fun httpsGet(proxyPort: Int?, host: String, path: String, maxBytes: Int, timeoutMs: Int): ByteArray {
+        fun httpsGet(proxyPort: Int?, host: String, path: String, maxBytes: Int, timeoutMs: Int, post: Boolean = false, headers: Map<String, String> = emptyMap()): ByteArray {
             var currentHost = host
             var currentPath = path
+            var currentPost = post
             repeat(MAX_REDIRECTS + 1) {
-                val bytes = fetchOnce(proxyPort, currentHost, currentPath, maxBytes, timeoutMs)
+                val bytes = fetchOnce(proxyPort, currentHost, currentPath, maxBytes, timeoutMs, currentPost, headers)
                 val location = redirectTarget(bytes) ?: return bytes
                 val (nextHost, nextPath) = resolveLocation(location, currentHost) ?: return bytes
+                // 303 — дальше GET; 307/308 сохраняют метод.
+                if (statusOf(bytes) == 303) currentPost = false
                 currentHost = nextHost
                 currentPath = nextPath
             }
@@ -354,13 +454,15 @@ class StrategyTester(
                 val rest = location.removePrefix("https://")
                 val hostPart = rest.substringBefore('/').substringBefore('?')
                 val pathPart = rest.removePrefix(hostPart).ifEmpty { "/" }
-                hostPart.substringBefore(':') to (if (pathPart.startsWith("/")) pathPart else "/$pathPart")
+                // Другой порт — не туда, куда проверяем (и не повод ходить через прокси на произвольные порты).
+                if (hostPart.substringAfter(':', "443") != "443") null
+                else hostPart.substringBefore(':') to (if (pathPart.startsWith("/")) pathPart else "/$pathPart")
             }
             location.startsWith("/") -> currentHost to location
             else -> null
         }
 
-        private fun fetchOnce(proxyPort: Int?, host: String, path: String, maxBytes: Int, timeoutMs: Int): ByteArray {
+        private fun fetchOnce(proxyPort: Int?, host: String, path: String, maxBytes: Int, timeoutMs: Int, post: Boolean, headers: Map<String, String>): ByteArray {
             val raw = if (proxyPort != null) {
                 Socks5.connect(proxyPort, host, 443, timeoutMs)
             } else {
@@ -372,17 +474,25 @@ class StrategyTester(
             raw.use {
                 val tls = (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(raw, host, 443, true) as SSLSocket
                 tls.use {
-                    tls.sslParameters = tls.sslParameters.apply { serverNames = listOf(SNIHostName(host)) }
+                    // Проверка имени в сертификате: перехват (портал Wi-Fi со своим сертификатом) — не «работает».
+                    tls.sslParameters = tls.sslParameters.apply {
+                        serverNames = listOf(SNIHostName(host))
+                        endpointIdentificationAlgorithm = "HTTPS"
+                    }
                     tls.soTimeout = timeoutMs
                     tls.startHandshake()
                     tls.outputStream.apply {
-                        write(httpRequest(host, path).toByteArray())
+                        write(httpRequest(host, path, post, headers).toByteArray(Charsets.ISO_8859_1))
+                        if (post) write(PostBody)
                         flush()
                     }
+                    // Весь ответ — не дольше двух сроков: медленная «струйка» (замедление) — тоже провал,
+                    // а не бесконечное ожидание (soTimeout ограничивает только паузу между пакетами).
+                    val deadline = System.nanoTime() + timeoutMs * 2_000_000L
                     val out = java.io.ByteArrayOutputStream()
                     val buffer = ByteArray(16 * 1024)
                     val input = tls.inputStream
-                    while (out.size() < maxBytes) {
+                    while (out.size() < maxBytes && System.nanoTime() < deadline) {
                         val n = runCatching { input.read(buffer) }.getOrElse { if (out.size() > 0) -1 else throw it }
                         if (n < 0) break
                         out.write(buffer, 0, n)

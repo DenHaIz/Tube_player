@@ -57,8 +57,11 @@ class BypassProxySelector(private val port: () -> Int?) : ProxySelector() {
  * Если DoH недоступен, остаётся системный DNS.
  */
 object DohDns : Dns {
+    /** Адрес вместо имени: IPv4 или IPv6 — его не резолвим. */
+    private val IpLiteral = Regex("""^(\d{1,3}(\.\d{1,3}){3}|\[?[0-9a-fA-F]*:[0-9a-fA-F:.]+]?)$""")
+
     override fun lookup(hostname: String): List<InetAddress> {
-        if (hostname == "localhost" || hostname.first().isDigit()) return Dns.SYSTEM.lookup(hostname)
+        if (hostname == "localhost" || IpLiteral.matches(hostname)) return Dns.SYSTEM.lookup(hostname)
         return LocalDns.shared().lookup(hostname).ifEmpty { Dns.SYSTEM.lookup(hostname) }
     }
 }
@@ -71,6 +74,19 @@ class ProxyGate(private val awaitReady: (Long) -> Unit, private val waitMs: Long
     override fun intercept(chain: Interceptor.Chain): Response {
         awaitReady(waitMs)
         return chain.proceed(chain.request())
+    }
+}
+
+/**
+ * Сбой запроса к YouTube через обход (обрыв, сброс, тайм-аут TLS) — сигнал сторожу проверить стратегию сейчас.
+ * Отменённые запросы (перемотка, закрытый экран) не считаются.
+ */
+class TroubleListener(private val port: () -> Int?, private val report: () -> Unit) : okhttp3.EventListener() {
+    override fun callFailed(call: okhttp3.Call, ioe: IOException) {
+        // Порта нет и при упавшем byedpi — об этом тоже нужно сообщить (контроллер поднимет его заново).
+        if (call.isCanceled()) return
+        if (!BypassProxySelector.needsBypass(call.request().url.host)) return
+        report()
     }
 }
 
@@ -103,8 +119,11 @@ object KeepPostRedirects : Interceptor {
         while (response.code in 300..308 && response.code != 304 && hops < MAX_HOPS) {
             val location = response.header("Location") ?: break
             val target = response.request.url.resolve(location) ?: break
+            // Только https и только видеоузлы: заголовки клиента не уходят на чужие адреса.
+            if (!target.isHttps || !target.host.endsWith(".googlevideo.com")) break
             response.close()
-            request = request.newBuilder().url(target).build()
+            // 303 — по стандарту дальше GET без тела; 301/302/307/308 видеоузлов ждут тот же POST.
+            request = if (response.code == 303) request.newBuilder().url(target).get().build() else request.newBuilder().url(target).build()
             response = chain.proceed(request)
             hops++
         }
@@ -119,8 +138,9 @@ object Http {
     const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
 
     /** Общий клиент: прокси, DoH для прямых соединений, блокировка рекламы. */
-    fun client(port: () -> Int?, adBlock: () -> Boolean = { true }, awaitReady: (Long) -> Unit = {}): OkHttpClient = OkHttpClient.Builder()
+    fun client(port: () -> Int?, adBlock: () -> Boolean = { true }, awaitReady: (Long) -> Unit = {}, onTrouble: () -> Unit = {}): OkHttpClient = OkHttpClient.Builder()
         .proxySelector(BypassProxySelector(port))
+        .eventListener(TroubleListener(port, onTrouble))
         .dns(DohDns)
         .addInterceptor(AdBlockInterceptor(adBlock))
         .addInterceptor(ProxyGate(awaitReady))

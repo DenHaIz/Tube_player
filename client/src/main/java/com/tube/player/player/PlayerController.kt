@@ -75,6 +75,8 @@ class PlayerController(
     private val settings: () -> PlayerSettings,
     /** Предел качества для текущей сети (Wi-Fi / мобильная). */
     private val qualityCap: () -> Int,
+    /** Сбой сети при загрузке видео или долгое «застревание» — сторож обхода проверит стратегию сразу. */
+    private val onNetworkTrouble: () -> Unit = {},
 ) {
     val player: ExoPlayer = ExoPlayer.Builder(context)
         // Старт после ~1 с буфера (по умолчанию 2,5 с), после остановки — 2 с; дальше копим до 50 с.
@@ -107,6 +109,7 @@ class PlayerController(
     private var controller: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
     private val ignoredSegments = mutableSetOf<String>()
     private var retried = false
+    private var stallJob: Job? = null
 
     /** Плавающее окно; создаётся при первом показе. */
     var popup: PopupPlayer? = null
@@ -127,6 +130,17 @@ class PlayerController(
             }
 
             override fun onPlayerError(error: PlaybackException) = onError(error)
+
+            // Буферизация дольше STALL_MS при включённом воспроизведении — похоже, обход перестал пропускать видео.
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                stallJob?.cancel()
+                if (playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                    stallJob = scope.launch {
+                        kotlinx.coroutines.delay(STALL_MS)
+                        if (player.playbackState == Player.STATE_BUFFERING && player.playWhenReady) onNetworkTrouble()
+                    }
+                }
+            }
         })
     }
 
@@ -271,6 +285,12 @@ class PlayerController(
     /** Ссылки googlevideo живут несколько часов: 403 — заново получить ссылки и продолжить с того же места. */
     private fun onError(error: PlaybackException) {
         val cause = error.cause
+        if (error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+        ) {
+            onNetworkTrouble()
+        }
         val details = _state.value.details
         if (!retried && details != null && cause is HttpDataSource.InvalidResponseCodeException && cause.responseCode in setOf(403, 410)) {
             retried = true
@@ -355,6 +375,9 @@ class PlayerController(
 }
 
 private const val POPUP_HANDOVER_MS = 220L
+
+/** Буферизация дольше этого при включённом воспроизведении — сигнал сторожу обхода. */
+private const val STALL_MS = 8_000L
 
 /** Устройство с малым объёмом памяти (система так помечает телефоны до ~2 ГБ). */
 private fun lowRam(context: android.content.Context): Boolean =

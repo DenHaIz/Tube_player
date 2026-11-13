@@ -55,20 +55,31 @@ fun loginUrl(email: String?): String =
 
 /**
  * Вход в Google в WebView. Трафик WebView идёт через тот же byedpi (ProxyController), пароль видит только
- * страница Google. Как только открылся youtube.com с cookie SAPISID — вход завершён.
+ * страница Google. Как только открылся youtube.com с cookie SAPISID — вход завершён; cookie WebView после этого
+ * стираются (копия — зашифрованная, в хранилище аккаунта).
+ *
+ * [proxyPort] — текущий порт byedpi (меняется при смене стратегии — прокси WebView переключается следом);
+ * [waiting] — byedpi ещё запускается: страница не открывается, пока прокси нет (иначе она ушла бы напрямую).
+ * Без запасного «напрямую»: если прокси недоступен, страница не грузится, а не идёт мимо обхода.
  * Если WebView не умеет прокси (очень старый), вход всё равно пробуем — напрямую.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit, email: String? = null) {
+fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit, email: String? = null, waiting: Boolean = false) {
     var loading by remember { mutableStateOf(true) }
-    var proxyReady by remember { mutableStateOf(proxyPort == null || !WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) }
+    val supported = remember { WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE) }
+    var proxyReady by remember { mutableStateOf(!supported) }
     val direct = Executor { it.run() }
 
-    DisposableEffect(proxyPort) {
-        if (proxyPort != null && WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            val config = ProxyConfig.Builder().addProxyRule("socks5://127.0.0.1:$proxyPort").addDirect().build()
-            ProxyController.getInstance().setProxyOverride(config, direct) { proxyReady = true }
+    DisposableEffect(proxyPort, waiting) {
+        when {
+            !supported -> Unit
+            proxyPort != null -> {
+                val config = ProxyConfig.Builder().addProxyRule("socks5://127.0.0.1:$proxyPort").build()
+                ProxyController.getInstance().setProxyOverride(config, direct) { proxyReady = true }
+            }
+            // Обход выключен — напрямую.
+            !waiting -> proxyReady = true
         }
         onDispose {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
@@ -117,7 +128,7 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit,
                                 override fun onPageFinished(view: WebView, url: String?) {
                                     loading = false
                                     val host = url?.let { android.net.Uri.parse(it).host }.orEmpty()
-                                    if (!host.endsWith("youtube.com")) return
+                                    if (host != "youtube.com" && !host.endsWith(".youtube.com")) return
                                     val cookies = CookieManager.getInstance().getCookie("https://www.youtube.com").orEmpty()
                                     if (Account(cookies).sapisid == null) return
                                     CookieManager.getInstance().flush()
@@ -130,6 +141,9 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit,
                                                 dataSyncId = parts?.optString(1)?.substringBefore("||")?.takeIf { it.isNotEmpty() && it != "null" },
                                             ),
                                         )
+                                        // Сессия Google не остаётся открытой в базе WebView: она уже сохранена зашифрованной.
+                                        CookieManager.getInstance().removeAllCookies(null)
+                                        CookieManager.getInstance().flush()
                                     }
                                 }
                             }

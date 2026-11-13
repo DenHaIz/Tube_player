@@ -12,6 +12,7 @@ import com.tube.player.data.SettingsRepository
 import com.tube.player.net.BypassController
 import com.tube.player.net.BypassProxy
 import com.tube.player.net.Http
+import com.tube.player.net.VideoProbe
 import com.tube.player.player.PlayerController
 import com.tube.player.player.YoutubeDataSource
 import com.tube.player.sponsorblock.ReturnDislike
@@ -21,6 +22,7 @@ import com.tube.player.youtube.Repository
 import com.tube.strategy.AutoPick
 import com.tube.strategy.NetworkKind
 import com.tube.strategy.NetworkMonitor
+import com.tube.strategy.ProbePlan
 import com.tube.strategy.ResultsStore
 import com.tube.update.UpdateChecker
 import com.tube.update.UpdateSource
@@ -52,12 +54,16 @@ class AppContainer(context: Context) {
 
     val network: NetworkMonitor by lazy { NetworkMonitor(appContext) }
     val results: ResultsStore by lazy { ResultsStore(appContext) }
-    val autoPick: AutoPick by lazy { AutoPick(appContext, settingsRepository, results, network, scope) }
-    val proxy: BypassProxy by lazy { BypassProxy(appContext) }
+    /** Проверка обхода настоящим видеопотоком (ссылка — через NewPipe). */
+    val videoProbe: VideoProbe by lazy { VideoProbe(scope, { network.current.value?.key }) { repository } }
+    val autoPick: AutoPick by lazy { AutoPick(appContext, settingsRepository, results, network, scope, ProbePlan.app { videoProbe.get() }) }
+    val proxy: BypassProxy by lazy { BypassProxy(appContext, scope) }
     val bypass: BypassController by lazy { BypassController(appContext, settingsRepository, proxy, network, results, autoPick, scope) }
 
     /** Один OkHttp на всё: NewPipe, превью, SponsorBlock, InnerTube — через byedpi. */
-    val http: OkHttpClient by lazy { Http.client(port = { proxy.port }, adBlock = { current.adBlock }, awaitReady = { bypass.awaitReady(it) }) }
+    val http: OkHttpClient by lazy {
+        Http.client(port = { proxy.port }, adBlock = { current.adBlock }, awaitReady = { bypass.awaitReady(it) }, onTrouble = { bypass.reportTrouble() })
+    }
     val mediaDataSource: DataSource.Factory by lazy { YoutubeDataSource.factory(Http.mediaClient(http)) }
 
     val repository: Repository by lazy {
@@ -86,6 +92,7 @@ class AppContainer(context: Context) {
                 val s = current
                 if (network.current.value?.kind == NetworkKind.Cellular) s.qualityMobile.height else s.qualityWifi.height
             },
+            onNetworkTrouble = { bypass.reportTrouble() },
         )
     }
 

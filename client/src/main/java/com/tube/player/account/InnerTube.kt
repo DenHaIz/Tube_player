@@ -104,7 +104,8 @@ class InnerTube(private val client: () -> OkHttpClient, private val account: () 
             .header("X-Youtube-Client-Version", YoutubeParsingHelper.getClientVersion())
             .apply { acc.visitorData?.let { header("X-Goog-Visitor-Id", it) } }
             .build()
-        client().newCall(request).execute().use { response ->
+        // Без переходов: cookie аккаунта заданы заголовком, и OkHttp понёс бы их на адрес из перенаправления.
+        client().newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(request).execute().use { response ->
             if (response.code == 401 || response.code == 403) throw NotSignedIn()
             if (!response.isSuccessful) error("InnerTube $endpoint: HTTP ${response.code}")
             JsonParser.`object`().from(response.body.string())

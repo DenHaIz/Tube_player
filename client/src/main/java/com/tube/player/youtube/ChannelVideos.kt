@@ -79,17 +79,38 @@ class ChannelListing(
         prefetched.clear()
         return when {
             !range.active -> sorted()
-            sort == ChannelSort.Popular -> Paged(all(search(query(range.from, range.to))).sortedByDescending(::views), null)
-            else -> {
-                val end = minOf(range.to ?: today, today)
-                val start = range.from ?: channelStart()
-                val newestFirst = sort == ChannelSort.Newest
-                months(start, end, newestFirst).forEach { m ->
-                    val thirds = (0..2).map { Part(m, it) }.filter { it.last >= start && it.first <= end }
-                    parts += if (newestFirst) thirds.reversed() else thirds
+            sort == ChannelSort.Popular -> {
+                var found = all(search(query(range.from, range.to)))
+                // Поиск по всему периоду иногда приходит пустым — тогда собираем период по частям.
+                if (found.isEmpty()) {
+                    planParts(newestFirst = true)
+                    val collected = ArrayList<FeedItem>()
+                    while (collected.size < PopularPages * 30) {
+                        val page = nextParts()
+                        collected += page.items
+                        if (page.next == null) break
+                    }
+                    token = null
+                    parts.clear()
+                    prefetched.clear()
+                    found = collected.distinctBy { it.url }
                 }
+                Paged(found.sortedByDescending(::views), null)
+            }
+            else -> {
+                planParts(newestFirst = sort == ChannelSort.Newest)
                 nextParts()
             }
+        }
+    }
+
+    /** Трети месяцев периода в порядке показа; без начала — от первого видео канала, без конца — по сегодня. */
+    private suspend fun planParts(newestFirst: Boolean) {
+        val end = minOf(range.to ?: today, today)
+        val start = range.from ?: channelStart()
+        months(start, end, newestFirst).forEach { m ->
+            val thirds = (0..2).map { Part(m, it) }.filter { it.last >= start && it.first <= end }
+            parts += if (newestFirst) thirds.reversed() else thirds
         }
     }
 

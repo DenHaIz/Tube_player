@@ -11,8 +11,8 @@ android {
         applicationId = "com.tube.player"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.4.7"
+        versionCode = 13
+        versionName = "0.4.8"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 

@@ -172,8 +172,14 @@ class UpdateChecker(private val context: Context, private val source: UpdateSour
         if (archive.packageName != context.packageName) error("wrong package")
         if (!isNewer(archive.versionName.orEmpty(), source.currentVersion)) error("not newer")
         val installed = signatures(installedInfo(pm))
-        val incoming = signatures(archive)
-        if (installed.isNotEmpty() && incoming.isNotEmpty() && installed != incoming) error("signature mismatch")
+        // Часть прошивок не отдаёт signingInfo архива — тогда старый способ (подписи v1/v2 тем же сертификатом).
+        @Suppress("DEPRECATION")
+        val incoming = signatures(archive).ifEmpty {
+            pm.getPackageArchiveInfo(file.absolutePath, PackageManager.GET_SIGNATURES)?.signatures.orEmpty().map { it.toCharsString() }.toSet()
+        }
+        // Без подписи или с чужой — не ставим (если подпись установленного неизвестна, решит установщик Android).
+        if (incoming.isEmpty()) error("unsigned")
+        if (installed.isNotEmpty() && installed != incoming) error("signature mismatch")
     }
 
     @Suppress("DEPRECATION")
@@ -223,7 +229,8 @@ class UpdateChecker(private val context: Context, private val source: UpdateSour
         var lastError: Exception? = null
         val sources: List<() -> Release?> = listOf<() -> Release?>(
             { fetchFromApi(latestUrl) },
-            { fetchFromApi(API_MIRROR + latestUrl) },
+            // Через зеркало берём только версию и размер: контрольной суммой от зеркала проверять его же файл бессмысленно.
+            { fetchFromApi(API_MIRROR + latestUrl)?.copy(sha256 = null) },
             { fetchFromPage(latestPage) },
         ) + PAGE_MIRRORS.map { mirror -> { fetchFromPage(mirror + latestPage) } }
         for (source in sources) {

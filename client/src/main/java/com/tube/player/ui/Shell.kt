@@ -231,10 +231,14 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                             LaunchedEffect(target.url) { feed.ensure() }
                             PlaylistScreen(target.name, vm.playlistHeaders.value[target.url], feed.state, vm::open, feed::loadMore, feed::refresh, padding)
                         }
-                        Route.Login -> LoginScreen(container.proxy.port, onDone = { acc ->
-                            vm.signedIn(acc)
-                            vm.back()
-                        }, onClose = { vm.back() }, email = vm.loginEmail)
+                        Route.Login -> {
+                            // Порт — живой: стратегия может смениться, пока идёт вход.
+                            val endpoint by container.proxy.endpoint.collectAsStateWithLifecycle()
+                            LoginScreen(endpoint?.port, onDone = { acc ->
+                                vm.signedIn(acc)
+                                vm.back()
+                            }, onClose = { vm.back() }, email = vm.loginEmail, waiting = bypass is com.tube.player.net.BypassStatus.Starting)
+                        }
                     }
                 }
             }

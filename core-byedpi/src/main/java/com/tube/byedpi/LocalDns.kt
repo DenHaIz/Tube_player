@@ -63,17 +63,19 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
      * Поэтому устаревший ответ отдаётся сразу и обновляется в фоне, а адреса YouTube запрашиваются заранее ([prefetch]).
      */
     fun resolve(query: ByteArray): ByteArray? {
-        if (query.size < 12) return null
-        val key = questionKey(query)
+        // Наверх и в кэш идёт только «чистый» запрос: стандартный заголовок и один вопрос. Иначе другое приложение
+        // могло бы странным запросом (флаги, лишние записи) положить в кэш пустой ответ под ключ запросов byedpi.
+        val clean = canonical(query) ?: return null
+        val key = questionKey(clean)
         val now = System.currentTimeMillis()
         val entry = cache[key]
         val body = when {
             entry != null && entry.freshUntil > now -> entry.body
             entry != null && entry.staleUntil > now -> {
-                refreshLater(key, query)
+                refreshLater(key, clean)
                 entry.body
             }
-            else -> runCatching { fetchShared(key, query).get(ANSWER_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()
+            else -> runCatching { fetchShared(key, clean).get(ANSWER_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()
         } ?: return null
         return body.copyOf().also {
             it[0] = query[0]
@@ -94,7 +96,7 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
     /** Заранее узнать адреса (A) — при старте VPN, чтобы первые соединения YouTube не ждали DoH. */
     fun prefetch(hosts: Collection<String>) {
         hosts.forEach { host ->
-            val query = runCatching { aQuery(host) }.getOrNull() ?: return@forEach
+            val query = runCatching { aQuery(host) }.getOrNull()?.let(::canonical) ?: return@forEach
             val entry = cache[questionKey(query)]
             if (entry == null || entry.freshUntil <= System.currentTimeMillis()) refreshLater(questionKey(query), query)
         }
@@ -122,8 +124,10 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
 
     private fun fetchAndStore(key: String, query: ByteArray): ByteArray? =
         fetch(query.copyOf().also { it[0] = 0; it[1] = 0 })?.also { response ->
-            // Кэшируем только успешные ответы (RCODE = 0).
-            if (response.size >= 12 && response[3].toInt() and 0x0F == 0) {
+            // Кэшируем только успешные ответы (RCODE = 0) с хотя бы одной записью и на тот же вопрос.
+            val answers = if (response.size >= 12) ((response[6].toInt() and 0xFF) shl 8) or (response[7].toInt() and 0xFF) else 0
+            val sameQuestion = response.size >= query.size && query.copyOfRange(12, query.size).contentEquals(response.copyOfRange(12, query.size))
+            if (response.size >= 12 && response[3].toInt() and 0x0F == 0 && answers > 0 && sameQuestion) {
                 val now = System.currentTimeMillis()
                 if (cache.size >= MAX_CACHE) trimCache(now)
                 cache[key] = Entry(now + FRESH_MS, now + STALE_MS, response)
@@ -291,6 +295,31 @@ class LocalDns private constructor(private val socket: DatagramSocket) {
         }
 
         /** Секция вопроса (имя + тип + класс) без id и флагов — ключ кэша. */
+        /**
+         * Запрос в стандартном виде: id 0, только RD, один вопрос (имя + тип + класс), без других записей.
+         * null — не запрос или вопрос битый (сжатие в вопросе, обрыв, больше одного вопроса).
+         */
+        internal fun canonical(query: ByteArray): ByteArray? {
+            if (query.size < 17) return null
+            if (query[2].toInt() and 0x80 != 0) return null // это ответ, а не вопрос
+            if (((query[4].toInt() and 0xFF) shl 8 or (query[5].toInt() and 0xFF)) != 1) return null
+            var i = 12
+            while (true) {
+                if (i >= query.size) return null
+                val len = query[i].toInt() and 0xFF
+                if (len == 0) break
+                if (len > 63) return null
+                i += 1 + len
+            }
+            val end = i + 1 + 4
+            if (end > query.size) return null
+            return ByteArray(end).also {
+                it[2] = 0x01 // RD
+                it[5] = 1 // QDCOUNT
+                query.copyInto(it, 12, 12, end)
+            }
+        }
+
         internal fun questionKey(query: ByteArray): String =
             query.copyOfRange(12, query.size).joinToString("") { "%02x".format(it) }
     }

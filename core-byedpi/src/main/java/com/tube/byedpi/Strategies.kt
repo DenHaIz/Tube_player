@@ -289,6 +289,24 @@ object Strategies {
 
     val all: List<Strategy> get() = builtIn + extended
 
+    /**
+     * Кандидаты для автоподбора: без повторов (строки набора ByeByeDPI, совпадающие со встроенными с точностью
+     * до пробелов) и, когда UDP закрыт (`-U`), без стратегий для QUIC — их TCP-часть повторяет другие.
+     * Выбранные раньше стратегии по-прежнему находятся через [byId].
+     */
+    fun candidates(blockUdp: Boolean): List<Strategy> {
+        val seen = HashSet<String>()
+        return all.filter { s ->
+            if (blockUdp && s.args.trimStart().startsWith("-Ku")) return@filter false
+            seen.add(s.args.trim().split(Whitespace).joinToString(" "))
+        }
+    }
+
+    private val Whitespace = Regex("\\s+")
+
+    /** Фейк с именем www.google.com: с августа 2026 ТСПУ его узнаёт — такие стратегии проверяются последними. */
+    fun usesGoogleFake(s: Strategy): Boolean = "www_google_com" in s.args
+
     val default: Strategy get() = builtIn.first()
 
     fun byId(id: String): Strategy? = all.firstOrNull { it.id == id }

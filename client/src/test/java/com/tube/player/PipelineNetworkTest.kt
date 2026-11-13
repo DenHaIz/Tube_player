@@ -112,6 +112,32 @@ class PipelineNetworkTest {
         assertTrue(relay.hosts.any { it.endsWith("googlevideo.com") })
     }
 
+    /**
+     * Проверка обхода видеопотоком: ссылка через NewPipe, затем запрос тестера (POST `x\0`, свой TLS, через SOCKS)
+     * получает ≥ 128 КБ — так же, как сторож и автоподбор проверяют стратегию.
+     */
+    @Test
+    fun videoProbeDownloadsStream() = runBlocking {
+        assumeTrue(System.getProperty("network") == "true")
+        val probe = com.tube.player.net.VideoProbe(kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO), { "test" }) { repo }.get()
+        println("video probe: ${probe?.host} post=${probe?.post} ua=${probe?.headers?.get("User-Agent")}")
+        assertTrue(probe != null && probe.host.endsWith(".googlevideo.com") && probe.minBytes >= 128 * 1024)
+        val plan = com.tube.strategy.ProbePlan.app { probe }
+        val probes = plan.full(null)
+        val started = System.nanoTime()
+        val bytes = com.tube.byedpi.StrategyTester.httpsGet(relay.port, probe!!.host, probe.path, probe.minBytes, 7000, probe.post, probe.headers)
+        val head = String(bytes, 0, minOf(bytes.size, 200), Charsets.ISO_8859_1).lineSequence().first()
+        println("stream probe: ${bytes.size} B in ${(System.nanoTime() - started) / 1_000_000} ms, $head; plan: ${probes.map { it.host }}")
+        assertTrue(head, head.contains(" 200 ") || head.contains(" 206 "))
+        assertTrue(bytes.size >= probe.minBytes)
+        // Остальные проверки плана тоже проходят через прокси.
+        for (p in probes.filter { it !== probe }) {
+            val n = com.tube.byedpi.StrategyTester.httpsGet(relay.port, p.host, p.path, p.minBytes, 7000).size
+            println("  ${p.host}${p.path.take(30)}: $n B (need ${p.minBytes})")
+            assertTrue(p.host, n >= p.minBytes)
+        }
+    }
+
     /** Сортировка канала чипами YouTube и период через поиск по каналу с датами (Fireship, канал с 2017 года). */
     @Test
     fun channelSortAndPeriod() = runBlocking {

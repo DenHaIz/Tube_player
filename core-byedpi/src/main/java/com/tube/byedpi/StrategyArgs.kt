@@ -57,6 +57,15 @@ object StrategyArgs {
 
     private val FakeFile = Regex("""[A-Za-z0-9_][A-Za-z0-9_.-]*""")
 
+    /**
+     * Опции, значение которых byedpi читает как путь к файлу, если оно не начинается с `:`. Из своей стратегии
+     * (её вставляют с форумов) путь отдал бы в сеть файлы приложения — например, базу cookie WebView.
+     * Разрешены только `:данные` и встроенные `@fake/<имя>`.
+     */
+    private val FileOptions = setOf('l', 'H', 'j')
+
+    private fun safeFileValue(value: String) = value.startsWith(":") || (value.startsWith("@fake/") && FakeFile.matches(value.removePrefix("@fake/")))
+
     sealed interface Result {
         data class Ok(val argv: List<String>) : Result
         data class Error(val message: String) : Result
@@ -105,10 +114,14 @@ object StrategyArgs {
                     val name = body.substringBefore('=')
                     if (name in reserved) return Result.Error("--$name")
                     val needsArg = longOptions[name] ?: return Result.Error(token)
+                    var value: String? = if ('=' in body) body.substringAfter('=') else null
                     if (needsArg && '=' !in body) {
                         if (i + 1 >= tokens.size) return Result.Error(token)
                         i++
+                        value = tokens[i]
                     }
+                    val short = options.entries.firstOrNull { it.value.first == name }?.key
+                    if (short in FileOptions && value != null && !safeFileValue(value)) return Result.Error("--$name $value")
                 }
                 token.startsWith("-") && token.length >= 2 -> {
                     val key = token[1]
@@ -116,6 +129,10 @@ object StrategyArgs {
                         return Result.Error("-$key")
                     }
                     val (_, needsArg) = options[key] ?: return Result.Error(token)
+                    if (needsArg && key in FileOptions) {
+                        val value = if (token.length > 2) token.substring(2) else tokens.getOrNull(i + 1)
+                        if (value != null && !safeFileValue(value)) return Result.Error("-$key $value")
+                    }
                     if (needsArg && token.length == 2) {
                         if (i + 1 >= tokens.size) return Result.Error(token)
                         i++

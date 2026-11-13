@@ -42,6 +42,16 @@ class StrategyArgsTest {
         assertTrue(StrategyArgs.parse("  ") is StrategyArgs.Result.Error)
     }
 
+    /** Своя стратегия не может отправить в сеть файл приложения (`-l`/`-H`/`-j` читают путь, если нет `:`). */
+    @Test
+    fun rejectsFilePathsInFileOptions() {
+        val cookies = "/data/user/0/com.tube.player/app_webview/Default/Cookies"
+        listOf("-f1 -l $cookies -O 9000", "-f1 -l$cookies", "--fake-data=$cookies", "--fake-data $cookies", "-H $cookies", "--ipset=/etc/hosts", "-j/proc/self/environ")
+            .forEach { assertTrue(it, StrategyArgs.parse(it) is StrategyArgs.Result.Error) }
+        listOf("-f1 -l :GET", "-l @fake/tls_clienthello_vk_com.bin", "-H:\"youtube.com\" -d1", "--fake-data=:x", "-j:1.2.3.4")
+            .forEach { assertTrue(it, StrategyArgs.parse(it) is StrategyArgs.Result.Ok) }
+    }
+
     @Test
     fun combinedFlags() {
         assertTrue(StrategyArgs.parse("-SY -d1") is StrategyArgs.Result.Ok)

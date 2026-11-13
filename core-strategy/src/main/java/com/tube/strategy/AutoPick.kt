@@ -70,11 +70,31 @@ class AutoPick(
     @Volatile var lastFoundWorking: Boolean = true
         private set
 
+    /** Пауза перед следующим фоновым подбором, если прошлый ничего не нашёл: 2 → 4 → … 30 мин (общая для всех сторожей). */
+    @Volatile var backoffMs: Long = MIN_BACKOFF_MS
+        private set
+
+    /** Идущий подбор запущен сторожем (фоновый): «Выкл» его отменяет. Ставится до запуска. */
+    @Volatile var isBackground: Boolean = false
+        private set
+
+    /** Сеть, для которой идёт подбор. */
+    @Volatile var pickKey: String? = null
+        private set
+
+    /**
+     * Кому отдать первую сработавшую стратегию фонового подбора — сторожу, который работает сейчас: если сторож
+     * перезапустился, пока идёт подбор, новый перехватывает итог (иначе он терялся до следующих двух провалов).
+     */
+    @Volatile var receiver: (suspend (StrategyScore) -> Unit)? = null
+
     val running: Boolean get() = busy.get()
 
     /** Подбор в фоне (в своём scope — переживает перезапуск сторожа). null — подбор уже идёт. */
     fun start(background: Boolean = false, onWorking: (suspend (StrategyScore) -> Unit)? = null): Job? {
         if (running) return null
+        isBackground = background
+        pickKey = network.current.value?.key
         return scope.launch { runFull(background, onWorking) }
     }
 
@@ -89,6 +109,8 @@ class AutoPick(
      */
     suspend fun runFull(background: Boolean = false, onWorking: (suspend (StrategyScore) -> Unit)? = null): List<StrategyScore> {
         if (!busy.compareAndSet(false, true)) return emptyList()
+        isBackground = background
+        pickKey = network.current.value?.key
         active = currentCoroutineContext()[Job]
         var ranking = emptyList<StrategyScore>()
         try {
@@ -97,6 +119,8 @@ class AutoPick(
         } finally {
             lastFinishedAt = System.currentTimeMillis()
             lastFoundWorking = ranking.any { it.works }
+            backoffMs = if (lastFoundWorking) MIN_BACKOFF_MS else (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+            isBackground = false
             active = null
             busy.set(false)
             _progress.value = _progress.value.copy(running = false)
@@ -232,6 +256,8 @@ class AutoPick(
 
     companion object {
         private const val VERIFY_LIMIT = 12
+        private const val MIN_BACKOFF_MS = 2 * 60_000L
+        private const val MAX_BACKOFF_MS = 30 * 60_000L
         private const val VERIFY_PARALLELISM = 3
         private const val DAY = 24 * 60 * 60_000L
 

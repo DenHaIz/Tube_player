@@ -21,6 +21,7 @@ import org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeChannelInfoItemExtractor
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamInfoItemExtractor
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamInfoItemLockupExtractor
+import org.schabi.newpipe.extractor.stream.StreamInfoItemExtractor
 import org.schabi.newpipe.extractor.stream.StreamInfoItemsCollector
 
 /**
@@ -115,10 +116,15 @@ class InnerTube(private val client: () -> OkHttpClient, private val account: () 
     companion object {
         private val VideoRenderers = setOf("videoRenderer", "gridVideoRenderer", "compactVideoRenderer")
 
-        /** Видео из ответа browse: обычные и новые (lockupViewModel), без рекламы и промо. */
+        /**
+         * Видео из ответа browse/next: обычные и новые (lockupViewModel), без рекламы и промо.
+         * Разбор дат — через сервис YouTube: он берёт шаблоны по языку, если для «ru-RU» отдельных нет
+         * (прямой `TimeAgoPatternsManager` для «ru-RU» отдаёт null — даты терялись). Просмотры новых карточек
+         * NewPipe понимает только с K/M/B — «13 тыс. просмотров» было бы 13; пересчитываем по тексту ([views]).
+         */
         fun items(root: JsonObject): List<FeedItem> {
             val collector = StreamInfoItemsCollector(ServiceList.YouTube.serviceId)
-            val parser = runCatching { TimeAgoPatternsManager.getTimeAgoParserFor(NewPipe.getPreferredLocalization()) }.getOrNull()
+            val parser = runCatching { ServiceList.YouTube.getTimeAgoParser(NewPipe.getPreferredLocalization()) }.getOrNull()
             walk(root) { key, value ->
                 when {
                     AdBlock.isAdRenderer(key) -> false
@@ -127,13 +133,52 @@ class InnerTube(private val client: () -> OkHttpClient, private val account: () 
                         false
                     }
                     key == "lockupViewModel" && value.getString("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO" -> {
-                        runCatching { collector.commit(YoutubeStreamInfoItemLockupExtractor(value, parser)) }
+                        runCatching { collector.commit(LockupViews(YoutubeStreamInfoItemLockupExtractor(value, parser), lockupViews(value))) }
                         false
                     }
                     else -> true
                 }
             }
             return collector.items.mapNotNull { it.toFeedItem() }.distinctBy { it.url }
+        }
+
+        /** Карточка с просмотрами, посчитанными по тексту; остальное — как у NewPipe. */
+        private class LockupViews(private val base: StreamInfoItemExtractor, private val views: Long?) : StreamInfoItemExtractor by base {
+            override fun getViewCount(): Long = views ?: base.viewCount
+        }
+
+        /** Текст просмотров новой карточки: «13 тыс. просмотров», «1,2 млн просмотров», «1.2M views», «Нет просмотров». */
+        private fun lockupViews(lockup: JsonObject): Long? {
+            var found: Long? = null
+            walk(lockup.getObject("metadata")) { key, value ->
+                if (found == null && key == "text") {
+                    value.getString("content")?.let { text -> if (ViewWords.containsMatchIn(text)) found = parseViews(text) }
+                }
+                found == null
+            }
+            return found
+        }
+
+        private val ViewWords = Regex("""просмотр|view|зрител|смотрят|watching""", RegexOption.IGNORE_CASE)
+
+        /**
+         * Число просмотров из текста YouTube на русском или английском. С сокращением (тыс/млн/млрд, K/M/B) запятая —
+         * десятичная («1,2 млн»); без сокращения разделители — тысячи («1 234 567», «1,234,567»). Не число — null.
+         */
+        fun parseViews(text: String): Long? {
+            val t = text.lowercase().replace('\u00a0', ' ').replace('\u202f', ' ')
+            if (Regex("""^\s*(нет|no)\s""").containsMatchIn(t)) return 0
+            // Сокращение — отдельным словом (не начало «views»/«более»): за ним не буква.
+            val m = Regex("""(\d[\d\s.,]*)\s*(?:(тыс|млн|млрд|k|m|b)(?![a-zа-яё]))?""").find(t) ?: return null
+            val number = m.groupValues[1].trim()
+            val mult = when (m.groupValues[2]) {
+                "тыс", "k" -> 1_000.0
+                "млн", "m" -> 1_000_000.0
+                "млрд", "b" -> 1_000_000_000.0
+                else -> return number.filter { it.isDigit() }.toLongOrNull()
+            }
+            val decimal = number.replace(" ", "").replace(',', '.').toDoubleOrNull() ?: return null
+            return (decimal * mult).toLong()
         }
 
         /** Обход JSON в глубину; [visit] возвращает false — внутрь этого объекта не заходить. */

@@ -45,6 +45,12 @@ class LocaleNetworkTest {
             check("channel", channel.map { it.title })
             // Даты «N дней назад» по-русски разбираются в время публикации.
             assertTrue("dates parsed", channel.count { it.uploadedAt > 0 } * 2 >= channel.size)
+            // «13 тыс. просмотров» — 13 000, а не 13 (у MrBeast меньше тысячи не бывает).
+            val popular = ChannelListing(NewPipeBrowse, beastId, ChannelSort.Popular, DateRange()).first().items.filterIsInstance<VideoItem>()
+            println("LOC views: ${popular.take(3).map { it.views }}")
+            assertTrue("views: ${popular.take(3).map { it.views }}", popular.all { it.views >= 100_000 })
+            val listing = ChannelListing(NewPipeBrowse, beastId, ChannelSort.Newest, DateRange()).first().items.filterIsInstance<VideoItem>()
+            assertTrue("newest dates", listing.count { it.uploadedAt > 0 } * 2 >= listing.size)
             check("search", repo.search("mrbeast").items.filterIsInstance<VideoItem>().filter { it.channelUrl?.contains(beastId) == true }.map { it.title })
             check("subscriptions feed", repo.feed(beast).map { it.title })
             check("popular", ChannelListing(NewPipeBrowse, beastId, ChannelSort.Popular, DateRange()).first().items.filterIsInstance<VideoItem>().map { it.title })

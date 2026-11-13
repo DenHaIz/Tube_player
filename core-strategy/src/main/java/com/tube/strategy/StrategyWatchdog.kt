@@ -15,7 +15,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
@@ -60,7 +62,6 @@ class StrategyWatchdog(
     @Volatile private var spare: Spare? = null
     @Volatile private var spareJob: Job? = null
     private var lastCheckAt = 0L
-    private var pickBackoffMs = PICK_BACKOFF_MS
 
     /** Сторож работает; после остановки (выключили обход, перезапуск) поздний итог подбора ничего не переключает. */
     @Volatile private var alive = false
@@ -76,7 +77,10 @@ class StrategyWatchdog(
 
     private suspend fun loop() = coroutineScope {
         val networkChanged = Channel<Unit>(Channel.CONFLATED)
-        launch { network.current.drop(1).collect { networkChanged.trySend(Unit) } }
+        // Только смена ключа сети (не имени оператора и прочего) — и с паузой: при переключении сеть «дрожит».
+        launch { network.current.map { it?.key }.distinctUntilChanged().drop(1).collect { networkChanged.trySend(Unit) } }
+        // Идёт фоновый подбор, запущенный прошлым сторожем, — его итог теперь получает этот.
+        if (autoPick.running && autoPick.isBackground) autoPick.receiver = ::deliverPick
         val troubled = Channel<Unit>(Channel.CONFLATED)
         trouble?.let { flow -> launch { flow.collect { troubled.trySend(Unit) } } }
         var lastKey = network.current.value?.key
@@ -91,9 +95,15 @@ class StrategyWatchdog(
                 troubled.onReceive { Wake.Trouble }
                 onTimeout((deadline - System.currentTimeMillis()).coerceAtLeast(0)) { Wake.Timer }
             }
+            if (woke == Wake.Network) kotlinx.coroutines.delay(NETWORK_SETTLE_MS)
             val now = System.currentTimeMillis()
             // Сбои в трафике идут пачками (десятки запросов разом) — не чаще раза в TROUBLE_GAP_MS.
             if (woke == Wake.Trouble && (now - lastCheckAt < TROUBLE_GAP_MS || now < quietUntil)) continue
+            // Пока идёт подбор, сеть занята его проверками (до 12 параллельно) — своя проверка соврёт.
+            if (autoPick.running) {
+                deadline = now + BUSY_RECHECK_MS
+                continue
+            }
             if (!settings.watchdog()) {
                 deadline = now + checkIntervalMs
                 continue
@@ -119,15 +129,21 @@ class StrategyWatchdog(
                 }
             }
 
-            val checks = checkCurrent(results.of(key)?.videoHost)
+            var checks = checkCurrent(results.of(key)?.videoHost)
+            // Ссылка на видеопоток устарела (4xx) — не верим этой проверке: без неё ещё раз.
+            if (checks.any { it.error?.startsWith("stale link") == true }) {
+                autoPick.plan.invalidate()
+                checks = checkCurrent(results.of(key)?.videoHost)
+            }
             lastCheckAt = System.currentTimeMillis()
             deadline = lastCheckAt + checkIntervalMs
-            val ok = checks.all { it.ok }
+            // Провал — обрыв, ошибка соединения или замирание (меньше SLOW_OK_BYTES); медленная, но идущая загрузка —
+            // не повод менять стратегию (слабая сеть, видео в 1080p забивает канал).
+            val ok = checks.all { it.ok || it.bytes >= SLOW_OK_BYTES }
             onStatus(WatchdogStatus(lastCheckAt, ok))
             if (ok) {
                 failures = 0
                 quietUntil = 0
-                pickBackoffMs = PICK_BACKOFF_MS
                 results.update(key) {
                     // Рабочая стратегия запоминается для сети, если там ещё ничего не выбрано.
                     it.copy(chosen = it.chosen ?: currentId, lastGood = it.lastGood + (currentId to lastCheckAt))
@@ -158,8 +174,8 @@ class StrategyWatchdog(
                 return@coroutineScope
             }
             // Проверенных замен нет — подбор в фоне; первая сработавшая стратегия включится сразу.
-            startPick(key)
-            deadline = System.currentTimeMillis() + pickBackoffMs
+            startPick()
+            deadline = System.currentTimeMillis() + autoPick.backoffMs
             quietUntil = deadline
         }
     }
@@ -184,7 +200,8 @@ class StrategyWatchdog(
         val now = System.currentTimeMillis()
         spare?.let { s -> if (s.key == key && s.strategy.id != currentId && now - s.at < SPARE_TRUST_MS) return s.strategy }
         val saved = results.of(key)
-        val known = (saved?.workingSince(now, WORKING_MAX_AGE_MS)?.map { it.strategy }.orEmpty() +
+        // По id — из текущих настроек: у своей стратегии в результатах могли остаться старые аргументы.
+        val known = (saved?.workingSince(now, WORKING_MAX_AGE_MS)?.map { settings.resolveStrategy(it.strategy.id) ?: it.strategy }.orEmpty() +
             saved?.lastGood?.entries?.sortedByDescending { it.value }?.mapNotNull { settings.resolveStrategy(it.key) }.orEmpty())
             .distinctBy { it.id }
             .filter { it.id != currentId }
@@ -208,16 +225,22 @@ class StrategyWatchdog(
     }
 
     /**
-     * Подбор в фоне, если он сейчас не идёт; недавний пустой подбор не повторяется чаще, чем раз в [pickBackoffMs].
-     * Итог применяется, только если сторож ещё работает и сеть та же: иначе он уже ни к чему.
+     * Подбор в фоне, если он сейчас не идёт: не чаще раза в [PICK_MIN_GAP_MS] (что бы ни нашёл прошлый),
+     * а после пустого — не раньше паузы [AutoPick.backoffMs]. Итог получает сторож, работающий в этот момент.
      */
-    private fun startPick(key: String) {
+    private fun startPick() {
+        autoPick.receiver = ::deliverPick
         if (autoPick.running) return
         val sinceLast = System.currentTimeMillis() - autoPick.lastFinishedAt
-        if (!autoPick.lastFoundWorking && sinceLast < pickBackoffMs) return
-        if (!autoPick.lastFoundWorking) pickBackoffMs = (pickBackoffMs * 2).coerceAtMost(MAX_PICK_BACKOFF_MS)
-        autoPick.start(background = true) { first ->
-            if (alive && network.current.value?.key == key && first.strategy.id != currentId) onSwitch(first.strategy, SwitchReason.Failed)
+        if (sinceLast < PICK_MIN_GAP_MS) return
+        if (!autoPick.lastFoundWorking && sinceLast < autoPick.backoffMs) return
+        autoPick.start(background = true) { first -> autoPick.receiver?.invoke(first) }
+    }
+
+    /** Итог фонового подбора: применяется, только если этот сторож ещё работает и сеть та же. */
+    private suspend fun deliverPick(first: StrategyScore) {
+        if (alive && network.current.value?.key == autoPick.pickKey && first.strategy.id != currentId) {
+            onSwitch(first.strategy, SwitchReason.Failed)
         }
     }
 
@@ -248,8 +271,11 @@ class StrategyWatchdog(
         private const val RECHECK_MS = 4_000L
         private const val OFFLINE_RECHECK_MS = 60_000L
         private const val TROUBLE_GAP_MS = 20_000L
-        private const val PICK_BACKOFF_MS = 2 * 60_000L
-        private const val MAX_PICK_BACKOFF_MS = 30 * 60_000L
+        private const val PICK_MIN_GAP_MS = 5 * 60_000L
+        private const val NETWORK_SETTLE_MS = 2_000L
+        private const val BUSY_RECHECK_MS = 60_000L
+        /** Пришло столько — значит, не замирание, а просто медленно. */
+        private const val SLOW_OK_BYTES = 24 * 1024
         private const val SPARE_TTL_MS = 30 * 60_000L
         /** Запасной, проверенной не раньше этого, доверяем без повторной проверки. */
         private const val SPARE_TRUST_MS = 15 * 60_000L

@@ -71,6 +71,7 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit,
     var proxyReady by remember { mutableStateOf(!supported) }
     val direct = Executor { it.run() }
 
+    // Смена порта — сразу новое правило, без снятия старого между ними (иначе запросы в этом зазоре шли напрямую).
     DisposableEffect(proxyPort, waiting) {
         when {
             !supported -> Unit
@@ -78,13 +79,23 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit,
                 val config = ProxyConfig.Builder().addProxyRule("socks5://127.0.0.1:$proxyPort").build()
                 ProxyController.getInstance().setProxyOverride(config, direct) { proxyReady = true }
             }
-            // Обход выключен — напрямую.
-            !waiting -> proxyReady = true
-        }
-        onDispose {
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-                runCatching { ProxyController.getInstance().clearProxyOverride(direct) {} }
+            // Обход включён, но byedpi сейчас нет (запуск, ошибка) — недоступный прокси: страница ждёт, а не идёт напрямую.
+            waiting -> {
+                val config = ProxyConfig.Builder().addProxyRule("socks5://127.0.0.1:1").build()
+                ProxyController.getInstance().setProxyOverride(config, direct) {}
             }
+            // Обход выключен — напрямую.
+            else -> ProxyController.getInstance().clearProxyOverride(direct) { proxyReady = true }
+        }
+        onDispose {}
+    }
+    // Экран закрыт: прокси WebView снимается, сессия Google в базе WebView не остаётся (и при брошенном входе).
+    DisposableEffect(Unit) {
+        onDispose {
+            if (supported) runCatching { ProxyController.getInstance().clearProxyOverride(direct) {} }
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            android.webkit.WebStorage.getInstance().deleteAllData()
         }
     }
 
@@ -150,7 +161,10 @@ fun LoginScreen(proxyPort: Int?, onDone: (Account) -> Unit, onClose: () -> Unit,
                             loadUrl(loginUrl(email))
                         }
                     },
-                    onRelease = { it.destroy() },
+                    onRelease = {
+                        it.clearCache(true)
+                        it.destroy()
+                    },
                 )
             }
             if (loading) Loading(Modifier.align(Alignment.Center))

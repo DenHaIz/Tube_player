@@ -1,5 +1,6 @@
 package com.tube.player.sponsorblock
 
+import com.tube.player.net.limitedString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -46,7 +47,7 @@ class SponsorBlock(private val client: () -> OkHttpClient) {
             val url = "$API/api/skipSegments/$prefix?categories=" + java.net.URLEncoder.encode(categories, "UTF-8")
             client().newCall(Request.Builder().url(url).build()).execute().use { response ->
                 when (response.code) {
-                    200 -> parse(response.body.string(), videoId)
+                    200 -> parse(response.body.limitedString(1L shl 20), videoId)
                     404 -> emptyList()
                     else -> error("SponsorBlock HTTP ${response.code}")
                 }

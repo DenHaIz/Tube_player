@@ -196,9 +196,14 @@ class TubeVpnService : VpnService() {
                 this@TubeVpnService, container.network, container.results, container.autoPick, container.settings,
                 port, settings.strategy.id, onStatus = TunnelState::setWatchdog,
             ) { next, reason ->
-                container.chooseStrategy(next.id)
-                Notifications.showSwitched(this@TubeVpnService, settings.strategy.name, next.name, reason)
-                startService(Intent(this@TubeVpnService, TubeVpnService::class.java).setAction(ACTION_RESTART).putExtra(EXTRA_BY_AUTOSTART, byAutostart))
+                // VPN уже выключили (итог фонового подбора пришёл позже) — не включать его снова.
+                if (proxy != null && TunnelState.status.value is TunnelStatus.Running) {
+                    container.chooseStrategy(next.id)
+                    Notifications.showSwitched(this@TubeVpnService, settings.strategy.name, next.name, reason)
+                    runCatching {
+                        startService(Intent(this@TubeVpnService, TubeVpnService::class.java).setAction(ACTION_RESTART).putExtra(EXTRA_BY_AUTOSTART, byAutostart))
+                    }
+                }
             }.run()
         }
     }

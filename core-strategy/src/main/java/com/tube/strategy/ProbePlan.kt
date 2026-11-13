@@ -11,6 +11,9 @@ interface ProbePlan {
     suspend fun quick(videoHost: String?): List<Probe>
     suspend fun full(videoHost: String?): List<Probe> = quick(videoHost)
 
+    /** Проверка видеопотоком ответила 4xx (ссылка устарела) — больше её не брать. */
+    fun invalidate() = Unit
+
     companion object {
         /** VPN (Tube): трафик приложения YouTube — Chrome-ClientHello, поэтому и проверки с ним. */
         val Vpn: ProbePlan = object : ProbePlan {
@@ -21,7 +24,9 @@ interface ProbePlan {
          * Встроенный прокси (Tube Player): проверки тем же TLS, что у OkHttp приложения; во втором круге и у сторожа —
          * загрузка настоящего видеопотока ([video], null — не удалось получить ссылку, тогда ответ видеоузла).
          */
-        fun app(video: suspend () -> Probe?): ProbePlan = object : ProbePlan {
+        fun app(video: suspend () -> Probe?, onStale: () -> Unit = {}): ProbePlan = object : ProbePlan {
+            override fun invalidate() = onStale()
+
             override suspend fun quick(videoHost: String?) = StrategyTester.appProbes(videoHost)
             override suspend fun full(videoHost: String?): List<Probe> {
                 val probe = try {

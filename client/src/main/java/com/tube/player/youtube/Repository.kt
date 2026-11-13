@@ -134,10 +134,11 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         }
     }
 
-    suspend fun channel(url: String): ChannelPage = io {
+    /** Шапка канала и ([withVideos]) первая страница видео через NewPipe. */
+    suspend fun channel(url: String, withVideos: Boolean = true): ChannelPage = io {
         val info = ChannelInfo.getInfo(yt.getChannelExtractor(url).fetched())
         val tab = info.tabs.firstOrNull { ChannelTabs.VIDEOS in it.contentFilters } ?: info.tabs.firstOrNull()
-        val videos = tab?.let { runCatching { ChannelTabInfo.getInfo(yt.getChannelTabExtractor(it).fetched()) }.getOrNull() }
+        val videos = tab?.takeIf { withVideos }?.let { runCatching { ChannelTabInfo.getInfo(yt.getChannelTabExtractor(it).fetched()) }.getOrNull() }
         ChannelPage(
             id = info.id,
             channel = ChannelItem(info.url, info.name, info.avatars.best(176)?.let { sharpAvatar(it, 264) }, info.subscriberCount, info.description),
@@ -211,8 +212,24 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
      * id видео → название на языке приложения с вкладок «Видео» и Shorts (первые страницы, параллельно) —
      * в RSS есть и то и другое. Только для ссылок /channel/UC…; вкладка не загрузилась — без неё.
      */
-    private suspend fun localizedTitles(channelUrl: String): Map<String, String> = kotlinx.coroutines.coroutineScope {
-        val id = ChannelIdPattern.find(channelUrl)?.groupValues?.get(1) ?: return@coroutineScope emptyMap()
+    private suspend fun localizedTitles(channelUrl: String): Map<String, String> {
+        val id = ChannelIdPattern.find(channelUrl)?.groupValues?.get(1) ?: return emptyMap()
+        // Названия канала живут час: лента подписок обновляется часто, а запросов на канал — два.
+        val cacheKey = id + "/" + localization.localizationCode
+        titleCache[cacheKey]?.takeIf { System.currentTimeMillis() - it.first < TITLES_MS }?.let { return it.second }
+        val fresh = fetchTitles(id)
+        if (fresh.isNotEmpty()) {
+            synchronized(titleCache) {
+                titleCache[cacheKey] = System.currentTimeMillis() to fresh
+                while (titleCache.size > 300) titleCache.remove(titleCache.keys.first())
+            }
+        }
+        return fresh
+    }
+
+    private val titleCache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Pair<Long, Map<String, String>>>())
+
+    private suspend fun fetchTitles(id: String): Map<String, String> = kotlinx.coroutines.coroutineScope {
         val videos = async {
             runCatching {
                 val root = NewPipeBrowse.browse(mapOf("browseId" to id, "params" to ChannelListing.VideosTab))
@@ -247,19 +264,17 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         val key = com.tube.player.youtube.videoId(url) ?: url
         if (!fresh) cache[key]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.let { return it.second }
         val details = io {
-            val extractor = try {
-                yt.getStreamExtractor(url).fetched()
-            } catch (e: org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException) {
-                // «Подтвердите, что вы не бот» — ещё раз с настройками NewPipe по умолчанию (en-GB), как до 0.4.9.
-                yt.getStreamExtractor(url).apply {
-                    forceLocalization(Localization.DEFAULT)
-                    forceContentCountry(contentCountry)
-                    fetchPage()
-                }
-            }
-            val d = details(StreamInfo.getInfo(extractor))
+            // «Подтвердите, что вы не бот» обходится в NewPipeDownloader запасными клиентами плеера (PlayerFallback).
+            val extractor = yt.getStreamExtractor(url).fetched()
+            var d = details(StreamInfo.getInfo(extractor))
+            val next = nextResponse(extractor)
             // NewPipe нарочно берёт исходное название (из ответа плеера); перевод автора — в ответе `next`.
-            localizedTitle(extractor)?.takeIf { it != d.item.title }?.let { d.copy(item = d.item.copy(title = it)) } ?: d
+            next?.let(::primaryTitle)?.takeIf { it != d.item.title }?.let { d = d.copy(item = d.item.copy(title = it)) }
+            // Похожие — из того же ответа нашим разбором: просмотры «13 тыс.» NewPipe считает как 13.
+            next?.let { com.tube.player.account.InnerTube.items(it).filter { item -> item.url != d.item.url } }
+                ?.takeIf { it.isNotEmpty() }?.let { d = d.copy(related = it) }
+            rememberStream(d)
+            d
         }
         synchronized(cache) {
             cache[key] = System.currentTimeMillis() to details
@@ -271,12 +286,46 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
     private val cache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Pair<Long, VideoDetails>>())
 
     /**
-     * Название на языке запроса из `videoPrimaryInfoRenderer` ответа `next` (поле `nextResponse` экстрактора
-     * NewPipe закрыто — берём рефлексией; в R8 оно сохранено правилом в proguard-rules.pro). Не вышло — null.
+     * Звуковая дорожка последнего открытого видео — для проверки обхода настоящим потоком (VideoProbe) без
+     * отдельных запросов плеера: частые запросы плеера одного и того же видео YouTube считает ботом.
      */
-    private fun localizedTitle(extractor: org.schabi.newpipe.extractor.stream.StreamExtractor): String? = runCatching {
+    @Volatile var lastStream: String? = null
+        private set
+
+    private fun rememberStream(d: VideoDetails) {
+        val audio = d.info?.audioStreams?.filter { it.isUrl && it.deliveryMethod == org.schabi.newpipe.extractor.stream.DeliveryMethod.PROGRESSIVE_HTTP }
+        audio?.let { list -> list.firstOrNull { it.itag == 140 } ?: list.maxByOrNull { it.averageBitrate } }?.content?.let { lastStream = it }
+    }
+
+    /**
+     * Похожие на видео — одним запросом `next` (без плеера и метаданных): для «Для вас», где нужно только это.
+     * Полное извлечение — 5 запросов, из них 2 к плееру, которые не заканчиваются просмотром, — похоже на бота.
+     */
+    suspend fun related(url: String): List<FeedItem> {
+        val id = com.tube.player.youtube.videoId(url) ?: return emptyList()
+        cache[id]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.let { return it.second.related }
+        return io {
+            val loc = localization
+            val body = org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.prepareDesktopJsonBuilder(loc, contentCountry)
+                .value("videoId", id).value("contentCheckOk", true).value("racyCheckOk", true).done()
+            val root = org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getJsonPostResponse(
+                "next", com.grack.nanojson.JsonWriter.string(body).toByteArray(Charsets.UTF_8), loc,
+            )
+            com.tube.player.account.InnerTube.items(root).filter { (it as? VideoItem)?.id != id }
+        }
+    }
+
+    /**
+     * Ответ `next` экстрактора NewPipe (поле `nextResponse` закрыто — берём рефлексией; в R8 оно сохранено правилом
+     * в proguard-rules.pro). Не вышло — null.
+     */
+    private fun nextResponse(extractor: org.schabi.newpipe.extractor.stream.StreamExtractor): com.grack.nanojson.JsonObject? = runCatching {
         val field = extractor.javaClass.getDeclaredField("nextResponse").apply { isAccessible = true }
-        val next = field.get(extractor) as? com.grack.nanojson.JsonObject ?: return null
+        field.get(extractor) as? com.grack.nanojson.JsonObject
+    }.getOrNull()
+
+    /** Название на языке запроса из `videoPrimaryInfoRenderer` ответа `next`. */
+    private fun primaryTitle(next: com.grack.nanojson.JsonObject): String? = runCatching {
         var title: String? = null
         com.tube.player.account.InnerTube.walk(next) { key, value ->
             if (title == null && key == "videoPrimaryInfoRenderer") {
@@ -320,6 +369,7 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         }
 
         private const val CACHE_MS = 30 * 60_000L
+        private const val TITLES_MS = 60 * 60_000L
         /**
          * Язык всегда со страной: из неё NewPipe собирает User-Agent плеера visionOS («…like Mac OS X; RU)»).
          * Без страны («ru») User-Agent выходил битым («…; )») — YouTube отвечал «подтвердите, что вы не бот»

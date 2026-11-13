@@ -246,7 +246,18 @@ class UpdateChecker(private val context: Context, private val source: UpdateSour
     private fun fetchFromApi(url: String): Release? {
         val connection = open(url, "Accept" to "application/vnd.github+json")
         val json = try {
-            JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            // Не больше 1 МБ: ответ может прийти через зеркало — бесконечный ответ не должен уронить приложение.
+            JSONObject(connection.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    out.write(buffer, 0, n)
+                    if (out.size() > MAX_API_BYTES) error("response too large")
+                }
+                String(out.toByteArray(), Charsets.UTF_8)
+            })
         } finally {
             connection.disconnect()
         }
@@ -310,6 +321,8 @@ class UpdateChecker(private val context: Context, private val source: UpdateSour
     }
 
     companion object {
+        private const val MAX_API_BYTES = 1 shl 20
+
         private const val AUTO_INTERVAL_MS = 6 * 60 * 60_000L
         private const val MAX_APK_BYTES = 100L * 1024 * 1024
 

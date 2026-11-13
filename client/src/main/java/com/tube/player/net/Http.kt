@@ -72,9 +72,20 @@ object DohDns : Dns {
  */
 class ProxyGate(private val awaitReady: (Long) -> Unit, private val waitMs: Long = 10_000) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
-        awaitReady(waitMs)
+        // Ждут только запросы, которые пойдут через обход: SponsorBlock, дизлайки — напрямую, им ждать нечего.
+        if (BypassProxySelector.needsBypass(chain.request().url.host)) awaitReady(waitMs)
         return chain.proceed(chain.request())
     }
+}
+
+/**
+ * Текст ответа не больше [max] байт: зеркало или чужой сервер не уронит приложение бесконечным ответом
+ * (нехватка памяти). Больше — исключение.
+ */
+fun okhttp3.ResponseBody.limitedString(max: Long): String {
+    val source = source()
+    if (source.request(max + 1)) throw IOException("response too large")
+    return source.buffer.readString(contentType()?.charset() ?: Charsets.UTF_8)
 }
 
 /**

@@ -113,16 +113,54 @@ class PipelineNetworkTest {
     }
 
     /**
+     * «Подтвердите, что вы не бот» у VISIONOS: запрос плеера повторяется клиентом iOS — видео извлекается,
+     * ссылки на потоки от iOS, звук качается тем же путём, что у плеера.
+     */
+    @Test
+    fun botCheckFallsBackToOtherClient() = runBlocking {
+        assumeTrue(System.getProperty("network") == "true")
+        val downloader = NewPipeDownloader { client }
+        downloader.forceFallback = true
+        val fallbackRepo = Repository(downloader, "ru", "RU")
+        try {
+            val info = fallbackRepo.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ", fresh = true).info!!
+            val audio = info.audioStreams.first { it.isUrl }
+            println("fallback audio: ${audio.content.substringAfter("&c=").substringBefore("&")} itag ${audio.itag}")
+            assertTrue(audio.content.contains("c=IOS") || audio.content.contains("c=ANDROID_VR"))
+            val source = YoutubeDataSource.factory(Http.mediaClient(client)).createDataSource()
+            val read = try {
+                source.open(DataSpec.Builder().setUri(Uri.parse(audio.content)).setPosition(0).setLength(128 * 1024L).build())
+                val buffer = ByteArray(16 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = source.read(buffer, 0, buffer.size)
+                    if (n < 0) break
+                    total += n
+                }
+                total
+            } finally {
+                source.close()
+            }
+            println("fallback audio bytes: $read")
+            assertTrue(read >= 64 * 1024)
+        } finally {
+            downloader.forceFallback = false
+            repo.setLocale("en", "US")
+        }
+    }
+
+    /**
      * Проверка обхода видеопотоком: ссылка через NewPipe, затем запрос тестера (POST `x\0`, свой TLS, через SOCKS)
      * получает ≥ 128 КБ — так же, как сторож и автоподбор проверяют стратегию.
      */
     @Test
     fun videoProbeDownloadsStream() = runBlocking {
         assumeTrue(System.getProperty("network") == "true")
-        val probe = com.tube.player.net.VideoProbe(kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO), { "test" }) { repo }.get()
+        repo.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        val probe = com.tube.player.net.VideoProbe({ "test" }) { repo }.get()
         println("video probe: ${probe?.host} post=${probe?.post} ua=${probe?.headers?.get("User-Agent")}")
         assertTrue(probe != null && probe.host.endsWith(".googlevideo.com") && probe.minBytes >= 128 * 1024)
-        val plan = com.tube.strategy.ProbePlan.app { probe }
+        val plan = com.tube.strategy.ProbePlan.app(video = { probe })
         val probes = plan.full(null)
         val started = System.nanoTime()
         val bytes = com.tube.byedpi.StrategyTester.httpsGet(relay.port, probe!!.host, probe.path, probe.minBytes, 7000, probe.post, probe.headers)

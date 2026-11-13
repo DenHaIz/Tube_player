@@ -57,7 +57,7 @@ class ResultsStore(context: Context) {
 
     @Synchronized
     fun update(key: String, transform: (NetworkResults) -> NetworkResults) {
-        _all.value = _all.value + (key to transform(_all.value[key] ?: NetworkResults()))
+        _all.value = prune(_all.value + (key to transform(_all.value[key] ?: NetworkResults())), keep = key)
         if (writeScheduled.compareAndSet(false, true)) {
             writer.schedule({
                 writeScheduled.set(false)
@@ -90,11 +90,23 @@ class ResultsStore(context: Context) {
 
     private fun load(): Map<String, NetworkResults> = runCatching {
         val root = JSONObject(String(file.readFully()))
-        root.keys().asSequence().associateWith { decodeNetwork(root.getJSONObject(it)) }
+        // Ключи прошлых версий приводятся к нынешнему виду; совпавшие — берём более свежую запись.
+        root.keys().asSequence().map { normalizeKey(it) to decodeNetwork(root.getJSONObject(it)) }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, list) -> list.maxBy { it.testedAt } }
     }.getOrDefault(emptyMap())
 
     companion object {
         private const val WRITE_DELAY_MS = 1500L
+        private const val MAX_NETWORKS = 30
+
+        /** Не больше [MAX_NETWORKS] сетей: выбрасываются самые давние (по подбору и подтверждению сторожем). */
+        internal fun prune(all: Map<String, NetworkResults>, keep: String? = null): Map<String, NetworkResults> {
+            if (all.size <= MAX_NETWORKS) return all
+            fun recency(n: NetworkResults) = maxOf(n.testedAt, n.lastGood.values.maxOrNull() ?: 0, n.scores.values.maxOfOrNull { it.at } ?: 0)
+            val kept = all.entries.sortedByDescending { if (it.key == keep) Long.MAX_VALUE else recency(it.value) }.take(MAX_NETWORKS)
+            return kept.associate { it.key to it.value }
+        }
 
         /**
          * Версия методики проверки. Результаты старой методики сбрасываются (выбор стратегии остаётся):

@@ -288,6 +288,39 @@ class LogicTest {
         assertTrue(ChannelListing.months(d(2021, 1, 1), d(2020, 1, 1), true).isEmpty())
     }
 
+    @Test
+    fun viewCountsInRussianAndEnglish() {
+        val p = InnerTube::parseViews
+        assertEquals(13_000L, p("13 тыс. просмотров"))
+        assertEquals(1_200_000L, p("1,2 млн просмотров"))
+        assertEquals(2_000_000_000L, p("2 млрд просмотров"))
+        assertEquals(456L, p("456 просмотров"))
+        assertEquals(1_234_567L, p("1 234 567 просмотров"))
+        assertEquals(1_234_567L, p("1,234,567 views"))
+        assertEquals(1_200L, p("1.2K views"))
+        assertEquals(3_400_000L, p("3.4M views"))
+        assertEquals(0L, p("Нет просмотров"))
+        assertEquals(0L, p("No views"))
+    }
+
+    /** Подмена клиента плеера: язык и visitorData сохраняются, устройство — запасного клиента. */
+    @Test
+    fun playerFallbackRewritesClient() {
+        val body = """{"context":{"client":{"clientName":"VISIONOS","clientVersion":"0.1","hl":"ru","gl":"RU","visitorData":"v1","deviceMake":"Apple"}},"videoId":"x","cpn":"c"}"""
+        val out = com.grack.nanojson.JsonParser.`object`().from(String(com.tube.player.youtube.PlayerFallback.rewrite(body.toByteArray(), com.tube.player.youtube.PlayerFallback.AndroidVr)))
+        val client = out.getObject("context").getObject("client")
+        assertEquals("ANDROID_VR", client.getString("clientName"))
+        assertEquals("ru", client.getString("hl"))
+        assertEquals("v1", client.getString("visitorData"))
+        assertEquals("Oculus", client.getString("deviceMake"))
+        assertEquals("x", out.getString("videoId"))
+        assertTrue(com.tube.player.youtube.PlayerFallback.isBotCheck("""{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in to confirm you’re not a bot"}}"""))
+        assertFalse(com.tube.player.youtube.PlayerFallback.isBotCheck("""{"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"This video may be inappropriate for some users"}}"""))
+        assertFalse(com.tube.player.youtube.PlayerFallback.isBotCheck("""{"playabilityStatus":{"status":"OK"}}"""))
+        assertEquals("IOS", com.tube.player.youtube.PlayerFallback.forStreamUrl("https://rr1---sn-x.googlevideo.com/videoplayback?itag=140&c=IOS&n=1")?.name)
+        assertEquals(null, com.tube.player.youtube.PlayerFallback.forStreamUrl("https://rr1---sn-x.googlevideo.com/videoplayback?c=VISIONOS"))
+    }
+
     /** Язык для NewPipe всегда со страной: из неё собирается User-Agent плеера; без неё YouTube требует «не бот». */
     @Test
     fun playerUserAgentHasCountry() {

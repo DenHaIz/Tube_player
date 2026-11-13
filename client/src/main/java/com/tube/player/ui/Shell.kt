@@ -237,7 +237,7 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                             LoginScreen(endpoint?.port, onDone = { acc ->
                                 vm.signedIn(acc)
                                 vm.back()
-                            }, onClose = { vm.back() }, email = vm.loginEmail, waiting = bypass is com.tube.player.net.BypassStatus.Starting)
+                            }, onClose = { vm.back() }, email = vm.loginEmail, waiting = bypass !is com.tube.player.net.BypassStatus.Off)
                         }
                     }
                 }

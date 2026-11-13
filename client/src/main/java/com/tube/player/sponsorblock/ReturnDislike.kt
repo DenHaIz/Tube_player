@@ -1,5 +1,6 @@
 package com.tube.player.sponsorblock
 
+import com.tube.player.net.limitedString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -15,7 +16,7 @@ class ReturnDislike(private val client: () -> OkHttpClient) {
         runCatching {
             client().newCall(Request.Builder().url("$API/votes?videoId=$videoId").build()).execute().use { r ->
                 if (r.code != 200) return@use null
-                parse(r.body.string())
+                parse(r.body.limitedString(1L shl 20))
             }
         }.getOrNull()
     }

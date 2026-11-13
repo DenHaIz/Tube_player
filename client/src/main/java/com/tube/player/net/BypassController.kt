@@ -62,14 +62,87 @@ class BypassController(
 
     /** Сообщить о сбое: сторож проверит стратегию сейчас, а не через 10 минут (не чаще раза в 20 с). */
     fun reportTrouble() {
-        val running = _status.value as? BypassStatus.Running ?: return
-        // Процесс умер — не ждать сторожа: поднять ту же стратегию сейчас.
-        if (!proxy.isAlive) {
-            liveness?.cancel()
-            scope.launch { if ((_status.value as? BypassStatus.Running)?.port == running.port) startWith(running.strategy) }
-            return
+        when (val s = _status.value) {
+            is BypassStatus.Running -> {
+                // Процесс умер — не ждать сторожа: поднять ту же стратегию сейчас (один раз на порт — под замком).
+                if (!proxy.isAlive) processDied(s.strategy, s.port) else trouble.tryEmit(Unit)
+            }
+            // Запуск не удался, а запросы идут — повторить, не дожидаясь паузы.
+            is BypassStatus.Failed -> retryNow()
+            else -> Unit
         }
-        trouble.tryEmit(Unit)
+    }
+
+    /** Перезапуски упавшего byedpi: время каждого — чтобы заметить, что стратегия падает раз за разом. */
+    private val restarts = ArrayDeque<Long>()
+
+    /**
+     * byedpi с [strategy] на [port] умер. Перезапуск той же стратегии — только если этот порт всё ещё текущий
+     * (проверяется под замком в [startWith]: десятки сбоев запросов не перезапускают его десятки раз и не
+     * откатывают уже выбранную другую). Падает больше [MAX_RESTARTS] раз за [RESTART_WINDOW_MS] — стратегия
+     * считается сломанной в этой сети и ищется замена.
+     */
+    private fun processDied(strategy: Strategy, port: Int) {
+        liveness?.cancel()
+        scope.launch {
+            val now = System.currentTimeMillis()
+            val crashing = synchronized(restarts) {
+                while (restarts.isNotEmpty() && now - restarts.first() > RESTART_WINDOW_MS) restarts.removeFirst()
+                restarts.addLast(now)
+                restarts.size > MAX_RESTARTS
+            }
+            if (!crashing) {
+                startWith(strategy, expectPort = port)
+                return@launch
+            }
+            synchronized(restarts) { restarts.clear() }
+            network.current.value?.key?.let { key ->
+                results.update(key) { it.copy(scores = it.scores + (strategy.id to com.tube.byedpi.StrategyScore(strategy, emptyList(), "crashed")), lastGood = it.lastGood - strategy.id) }
+            }
+            val next = replacementFor(strategy.id)
+            if (next != null) {
+                startWith(next, expectPort = port)
+            } else {
+                startWith(strategy, expectPort = port)
+                autoPick.start(background = true) { first -> if (currentId() != first.strategy.id) choose(first.strategy.id, auto = true) }
+            }
+        }
+    }
+
+    /** Рабочая (по свежим итогам) другая стратегия этой сети. */
+    private suspend fun replacementFor(id: String): Strategy? {
+        val saved = results.of(network.current.value?.key) ?: return null
+        return saved.workingSince(System.currentTimeMillis(), 3 * 24 * 60 * 60_000L)
+            .firstOrNull { it.strategy.id != id }?.let { settings.resolveStrategy(it.strategy.id) ?: it.strategy }
+    }
+
+    private var retryJob: Job? = null
+    private var failedStarts = 0
+
+    /** Запуск не удался: повтор через 5 с, 30 с, 2 мин…; после трёх неудач подряд — другая стратегия (подбор). */
+    private fun scheduleRetry(strategy: Strategy) {
+        failedStarts++
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            kotlinx.coroutines.delay(RetryDelays[minOf(failedStarts - 1, RetryDelays.lastIndex)])
+            retry(strategy)
+        }
+    }
+
+    private fun retryNow() {
+        val job = retryJob ?: return
+        if (!job.isActive) return
+        job.cancel()
+        scope.launch { (lastAttempt ?: strategyForNetwork()).let { retry(it) } }
+    }
+
+    private var lastAttempt: Strategy? = null
+
+    private suspend fun retry(strategy: Strategy) {
+        if (failedStarts >= 3) {
+            replacementFor(strategy.id)?.let { return startWith(it) }
+        }
+        startWith(strategy)
     }
 
     /** Следить за режимом из настроек: «Авто» — поднять byedpi, «Выкл» — остановить. */
@@ -86,8 +159,9 @@ class BypassController(
                         watchdog?.cancel()
                         liveness?.cancel()
                         appCheck?.cancel()
+                        retryJob?.cancel()
                         // Подбор, запущенный сторожем, больше не нужен; начатый кнопкой — доработает и только сохранит итог.
-                        if (autoPick.progress.value.background) autoPick.cancel()
+                        if (autoPick.isBackground) autoPick.cancel()
                         proxy.stop()
                         _status.value = BypassStatus.Off
                     }
@@ -107,15 +181,21 @@ class BypassController(
      * (только когда он исправен: смена на более быструю); после сбоя он гасится сразу, чтобы соединения
      * через сломанную стратегию не держали видео.
      */
-    private suspend fun startWith(strategy: Strategy, drain: Boolean = false): Unit = lock.withLock {
+    private suspend fun startWith(strategy: Strategy, drain: Boolean = false, expectPort: Int? = null): Unit = lock.withLock {
         if (!enabled) return@withLock
+        // Перезапуск упавшего процесса — только если тот порт всё ещё текущий (иначе уже выбрана другая стратегия).
+        if (expectPort != null && (_status.value as? BypassStatus.Running)?.port != expectPort) return@withLock
         watchdog?.cancel()
         liveness?.cancel()
+        retryJob?.cancel()
+        lastAttempt = strategy
         _status.value = BypassStatus.Starting
         val endpoint = runCatching { proxy.start(strategy, settings.blockQuic(), settings.fakeSni(), drain) }.getOrElse { e ->
             _status.value = BypassStatus.Failed(e.message ?: e.javaClass.simpleName)
+            scheduleRetry(strategy)
             return@withLock
         }
+        failedStarts = 0
         _status.value = BypassStatus.Running(strategy, endpoint.port)
         appCheck?.cancel()
         appCheck = scope.launch { checkAppPath(endpoint.port) }
@@ -175,7 +255,7 @@ class BypassController(
             val running = _status.value as? BypassStatus.Running ?: return
             if (running.port != port) return
             if (!proxy.isAlive) {
-                scope.launch { startWith(strategy) }
+                processDied(strategy, port)
                 return
             }
         }
@@ -237,5 +317,8 @@ class BypassController(
 
     private companion object {
         const val LIVENESS_MS = 3_000L
+        const val MAX_RESTARTS = 3
+        const val RESTART_WINDOW_MS = 60_000L
+        val RetryDelays = longArrayOf(5_000L, 30_000L, 120_000L)
     }
 }

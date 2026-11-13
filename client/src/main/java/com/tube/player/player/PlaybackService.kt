@@ -33,11 +33,37 @@ class PlaybackService : MediaSessionService() {
             .setSessionActivity(open)
             // Обложка в уведомлении тоже идёт через byedpi: i.ytimg.com может быть недоступен напрямую.
             .setBitmapLoader(CacheBitmapLoader(DataSourceBitmapLoader.Builder(this).setDataSourceFactory(container.mediaDataSource).build()))
+            .setCallback(LimitedControllers())
             .build()
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_stat_player) })
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+
+    /**
+     * Сервис открыт другим приложениям (так требует Media3 для уведомления, гарнитур и Android Auto). Чужие пульты
+     * управляют воспроизведением, но не подменяют видео: свои адреса в плеер (а значит, запросы через наш обход)
+     * они не добавят. Системные и доверенные — как обычно.
+     */
+    private inner class LimitedControllers : MediaSession.Callback {
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            if (controller.isTrusted || controller.packageName == packageName) {
+                return super.onConnect(session, controller)
+            }
+            val commands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
+                .remove(androidx.media3.common.Player.COMMAND_SET_MEDIA_ITEM)
+                .remove(androidx.media3.common.Player.COMMAND_CHANGE_MEDIA_ITEMS)
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailablePlayerCommands(commands).build()
+        }
+
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<androidx.media3.common.MediaItem>,
+        ): com.google.common.util.concurrent.ListenableFuture<MutableList<androidx.media3.common.MediaItem>> =
+            com.google.common.util.concurrent.Futures.immediateFailedFuture(UnsupportedOperationException())
+    }
 
     /** Смахнули приложение из недавних: если видео на паузе — закрываемся, если играет в фоне — продолжаем. */
     override fun onTaskRemoved(rootIntent: Intent?) {

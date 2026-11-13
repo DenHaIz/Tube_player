@@ -121,14 +121,22 @@ class StrategyTester(
         var lastError: Exception? = null
         var proxy: ByeDpiProcess? = null
         for (attempt in 0 until START_ATTEMPTS) {
-            // Запуск не прерывается отменой: иначе процесс, созданный в момент отмены, остался бы без stop().
-            proxy = try {
-                withContext(Dispatchers.IO + NonCancellable) { ByeDpiProcess.start(context, ByeDpiProcess.freePort(), argv, blockUdp, fakeSni) }
+            // Запуск не прерывается отменой, а созданный процесс запоминается внутри того же блока: при отмене
+            // возврат из withContext бросает CancellationException уже после запуска — процесс не должен потеряться.
+            val started = java.util.concurrent.atomic.AtomicReference<ByeDpiProcess?>()
+            try {
+                withContext(Dispatchers.IO + NonCancellable) {
+                    started.set(ByeDpiProcess.start(context, ByeDpiProcess.freePort(), argv, blockUdp, fakeSni))
+                }
+            } catch (e: CancellationException) {
+                started.get()?.let { p -> withContext(NonCancellable + Dispatchers.IO) { p.stop() } }
+                throw e
             } catch (e: Exception) {
                 lastError = e
-                null
             }
+            proxy = started.get()
             if (proxy != null) break
+            coroutineContext.ensureActive()
         }
         if (proxy != null && !coroutineContext.isActive) {
             withContext(NonCancellable + Dispatchers.IO) { proxy.stop() }
@@ -269,6 +277,7 @@ class StrategyTester(
         private const val CHROME_TEMPLATE = "fake/tls_clienthello_vk_com_kyber.bin"
         private const val DISCOVERY_ATTEMPTS = 8
         private const val DISCOVERY_PARALLEL = 4
+        private val RedirectDomains = listOf("youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com", "google.com", "googleapis.com", "gstatic.com", "youtu.be")
         private const val STALE_LINK_MIN_BYTES = 12
 
         /** Код ответа HTTP из первой строки; -1 — не HTTP. */
@@ -389,7 +398,8 @@ class StrategyTester(
         fun rank(scores: List<StrategyScore>): List<StrategyScore> =
             scores.sortedWith(compareByDescending<StrategyScore> { it.passed }.thenBy { it.avgMillis })
 
-        private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        /** Тот же браузер, что у остальных запросов приложения (NewPipe, InnerTube): один отпечаток с одного адреса. */
+        private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
 
         /** Тело POST видеоузлу — как у NewPipe/YouTube. */
         private val PostBody = byteArrayOf(0x78, 0)
@@ -404,6 +414,8 @@ class StrategyTester(
                 // Десктопный браузер: с мобильным UA youtube.com сразу уводит на m.youtube.com коротким 302.
                 if (extra.keys.none { it.equals("User-Agent", ignoreCase = true) }) add("User-Agent: $DESKTOP_UA")
                 extra.forEach { (k, v) -> add("$k: $v") }
+                // Согласие на cookie (как у NewPipe): без него из ЕС youtube.com уводит на страницу согласия.
+                if (host == "youtube.com" || host.endsWith(".youtube.com")) add("Cookie: SOCS=CAE=")
                 add("Accept: */*")
                 add("Accept-Language: ru-RU,ru;q=0.9,en;q=0.8")
                 if (post) add("Content-Length: ${PostBody.size}")
@@ -455,8 +467,10 @@ class StrategyTester(
                 val hostPart = rest.substringBefore('/').substringBefore('?')
                 val pathPart = rest.removePrefix(hostPart).ifEmpty { "/" }
                 // Другой порт — не туда, куда проверяем (и не повод ходить через прокси на произвольные порты).
-                if (hostPart.substringAfter(':', "443") != "443") null
-                else hostPart.substringBefore(':') to (if (pathPart.startsWith("/")) pathPart else "/$pathPart")
+                val host = hostPart.substringBefore(':').lowercase()
+                // Только 443 и только узлы YouTube/Google: проверка не уходит по редиректу на чужие адреса.
+                if (hostPart.substringAfter(':', "443") != "443" || RedirectDomains.none { host == it || host.endsWith(".$it") }) null
+                else host to (if (pathPart.startsWith("/")) pathPart else "/$pathPart")
             }
             location.startsWith("/") -> currentHost to location
             else -> null

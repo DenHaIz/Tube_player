@@ -104,7 +104,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (mixed.isEmpty()) (music.exceptionOrNull() ?: gaming.exceptionOrNull())?.let { throw it }
             return mixed
         }
-        val related = viewModelScopeAsync(recent) { url -> repo.video(url).related.filterIsInstance<VideoItem>() }
+        // Только похожие (запрос `next`), без извлечения видео: 3 полных извлечения подряд без просмотра — как у бота.
+        val related = viewModelScopeAsync(recent) { url -> repo.related(url).filterIsInstance<VideoItem>() }
         val watched = container.library.history.items.value.map { it.video.id }.toSet()
         return interleave(related).filter { it !is VideoItem || it.id !in watched }
     }
@@ -159,7 +160,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val channels = container.library.subscriptions.items.value
         if (channels.isEmpty()) return emptyList()
-        val gate = Semaphore(6)
+        val gate = Semaphore(4)
         val all = kotlinx.coroutines.coroutineScope {
             channels.map { sub -> async { gate.withPermit { runCatching { repo.feed(sub.channel.url) }.getOrDefault(emptyList()) } } }.awaitAll()
         }.flatten()
@@ -184,21 +185,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * (чипы сортировки YouTube и поиск по каналу с датами). Шапка канала грузится вместе с первой страницей.
      */
     private fun channelFeed(model: ChannelModel): Feed {
-        suspend fun page() = repo.channel(model.url).also {
+        // Шапка — через NewPipe, видео — всегда через ChannelListing: наш разбор карточек считает просмотры
+        // «13 тыс.» верно (NewPipe понимает только K/M/B) и даёт сортировку и период.
+        suspend fun page() = repo.channel(model.url, withVideos = false).also {
             model.header = it.channel
             model.banner = it.banner
             model.id = it.id
         }
         val sort = model.sort
         val range = model.range
-        if (sort == ChannelSort.Newest && !range.active) {
-            var tab: org.schabi.newpipe.extractor.linkhandler.ListLinkHandler? = null
-            return Feed(
-                viewModelScope,
-                first = { page().also { tab = it.videosTab }.videos },
-                more = { p -> tab?.let { repo.channelMore(it, p) } ?: Paged(emptyList(), null) },
-            )
-        }
         var listing: ChannelListing? = null
         return Feed(
             viewModelScope,
@@ -353,6 +348,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun signOut() {
         container.accounts.clear()
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
+        android.webkit.CookieManager.getInstance().flush()
+        android.webkit.WebStorage.getInstance().deleteAllData()
         homeFeeds.remove(HomeSection.ForYou)
         importedCount = null
     }

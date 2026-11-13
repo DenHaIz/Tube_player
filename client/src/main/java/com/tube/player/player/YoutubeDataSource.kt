@@ -30,14 +30,19 @@ object YoutubeDataSource {
     internal fun resolve(spec: DataSpec, requestNumber: AtomicLong): DataSpec {
         val url = spec.uri.toString()
         val headers = HashMap(spec.httpRequestHeaders)
-        if (!isVideoPlayback(spec.uri)) {
+        // Сегменты эфира — ссылки-пути (…/videoplayback/id/…/sq/N/…) без «?»: их не трогаем (GET, без rn),
+        // иначе «&rn=» портил последний сегмент пути.
+        if (!isVideoPlayback(spec.uri) || spec.uri.query == null || "/sq/" in (spec.uri.path ?: "")) {
             headers.putIfAbsent("User-Agent", Http.USER_AGENT)
             return spec.buildUpon().setHttpRequestHeaders(headers).build()
         }
-        var target = url
-        if (!url.contains("&rn=")) target += "&rn=" + requestNumber.getAndIncrement()
+        val target = if (spec.uri.getQueryParameter("rn") != null) url else spec.uri.buildUpon().appendQueryParameter("rn", requestNumber.getAndIncrement().toString()).build().toString()
+        val fallback = com.tube.player.youtube.PlayerFallback.forStreamUrl(url)
         when {
-            YoutubeParsingHelper.isVisionOsStreamingUrl(url) -> headers["User-Agent"] = YoutubeParsingHelper.getVisionOsUserAgent(null)
+            // User-Agent — тот же, с которым получена ссылка: для VISIONOS он собирается из языка запроса (страна в конце).
+            YoutubeParsingHelper.isVisionOsStreamingUrl(url) -> headers["User-Agent"] = YoutubeParsingHelper.getVisionOsUserAgent(org.schabi.newpipe.extractor.NewPipe.getPreferredLocalization())
+            // Ссылки запасных клиентов (iOS, Android VR — когда VISIONOS получил «не бот»).
+            fallback != null -> headers["User-Agent"] = fallback.userAgent
             YoutubeParsingHelper.isWebStreamingUrl(url) -> {
                 headers["User-Agent"] = Http.USER_AGENT
                 headers["Origin"] = YOUTUBE

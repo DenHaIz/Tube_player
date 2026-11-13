@@ -138,12 +138,20 @@ class ChannelListing(
      * не вышло за [ChipAttempts] — ошибка с «Повторить», а не ложное «Видео нет».
      */
     private suspend fun sorted(): Paged<FeedItem> {
-        var root = JsonObject()
+        var root = api.browse(mapOf("browseId" to channelId, "params" to VideosTab))
+        visitor = visitorOf(root)
+        // «Новые» — сама вкладка (она и так по дате), без запроса по чипу.
+        if (sort == ChannelSort.Newest) {
+            val first = parse(root)
+            token = first.next
+            return Paged(first.items, first.next?.let { More })
+        }
         for (attempt in 0 until ChipAttempts) {
-            if (attempt > 0) kotlinx.coroutines.delay(500L * attempt)
-            visitor = null
-            root = api.browse(mapOf("browseId" to channelId, "params" to VideosTab))
-            visitor = visitorOf(root)
+            if (attempt > 0) {
+                kotlinx.coroutines.delay(600L * attempt)
+                // Последняя попытка — со свежими токенами, но той же сессией (новая сессия на каждую — как у бота).
+                if (attempt == ChipAttempts - 1) root = api.browse(mapOf("browseId" to channelId, "params" to VideosTab) + visitorField())
+            }
             val chips = chips(root)
             if (chips.size < 3) break
             val chunk = continuation(chips[sort.ordinal])
@@ -170,7 +178,8 @@ class ChannelListing(
         val out = ArrayList<FeedItem>()
         var requests = 0
         // Пока ничего не нашли — идём дальше, сколько бы пустых частей ни было; иначе — не больше MaxRequests за раз.
-        while (out.size < MinBatch && (out.isEmpty() || requests < MaxRequests)) {
+        // Пустые части проходим подряд, но не бесконечно: не больше HardCap запросов за раз (дальше — по прокрутке).
+        while (out.size < MinBatch && requests < HardCap && (out.isEmpty() || requests < MaxRequests)) {
             val t = token
             if (t != null) {
                 val chunk = continuation(t)
@@ -262,6 +271,7 @@ class ChannelListing(
         const val SearchTab = "EgZzZWFyY2jyBgQKAloA"
         private const val MinBatch = 12
         private const val MaxRequests = 12
+        private const val HardCap = 90
         private const val Parallel = 6
         private const val PopularPages = 8
         val YoutubeStart: LocalDate = LocalDate.of(2005, 4, 1)

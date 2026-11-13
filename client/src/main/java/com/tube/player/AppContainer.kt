@@ -55,8 +55,10 @@ class AppContainer(context: Context) {
     val network: NetworkMonitor by lazy { NetworkMonitor(appContext) }
     val results: ResultsStore by lazy { ResultsStore(appContext) }
     /** Проверка обхода настоящим видеопотоком (ссылка — через NewPipe). */
-    val videoProbe: VideoProbe by lazy { VideoProbe(scope, { network.current.value?.key }) { repository } }
-    val autoPick: AutoPick by lazy { AutoPick(appContext, settingsRepository, results, network, scope, ProbePlan.app { videoProbe.get() }) }
+    val videoProbe: VideoProbe by lazy { VideoProbe({ network.current.value?.key }) { repository } }
+    val autoPick: AutoPick by lazy {
+        AutoPick(appContext, settingsRepository, results, network, scope, ProbePlan.app(video = { videoProbe.get() }, onStale = { videoProbe.invalidate() }))
+    }
     val proxy: BypassProxy by lazy { BypassProxy(appContext, scope) }
     val bypass: BypassController by lazy { BypassController(appContext, settingsRepository, proxy, network, results, autoPick, scope) }
 

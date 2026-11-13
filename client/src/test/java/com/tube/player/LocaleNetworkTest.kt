@@ -43,6 +43,8 @@ class LocaleNetworkTest {
             }
             val channel = repo.channel(beast).videos.items.filterIsInstance<VideoItem>()
             check("channel", channel.map { it.title })
+            // Даты «N дней назад» по-русски разбираются в время публикации.
+            assertTrue("dates parsed", channel.count { it.uploadedAt > 0 } * 2 >= channel.size)
             check("search", repo.search("mrbeast").items.filterIsInstance<VideoItem>().filter { it.channelUrl?.contains(beastId) == true }.map { it.title })
             check("subscriptions feed", repo.feed(beast).map { it.title })
             check("popular", ChannelListing(NewPipeBrowse, beastId, ChannelSort.Popular, DateRange()).first().items.filterIsInstance<VideoItem>().map { it.title })
@@ -50,6 +52,8 @@ class LocaleNetworkTest {
             val video = repo.video(channel.first().url)
             println("LOC video: ${video.item.title} | related ${video.related.filterIsInstance<VideoItem>().take(3).map { it.title }}")
             check("video", listOf(video.item.title))
+            // Потоки есть — плеер получил ответ (а не «подтвердите, что вы не бот»).
+            assertTrue("streams", video.info?.audioStreams?.isNotEmpty() == true)
 
             repo.setLocale("en", "RU")
             val en = repo.channel(beast).videos.items.filterIsInstance<VideoItem>().map { it.title }

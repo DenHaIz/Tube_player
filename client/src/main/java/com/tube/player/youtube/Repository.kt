@@ -77,16 +77,16 @@ data class ChannelPage(
 class Repository(downloader: Downloader, language: String = "ru", country: String = "RU") {
     private val yt get() = ServiceList.YouTube
 
-    @Volatile private var localization = Localization(language)
+    @Volatile private var localization = localizationFor(language, country)
     @Volatile private var contentCountry = ContentCountry(country)
 
     init {
         NewPipe.init(downloader, localization, contentCountry)
     }
 
-    /** Язык интерфейса YouTube (`hl`: «ru»/«en» — без страны: «en-RU» YouTube отклоняет) и страна выдачи. */
+    /** Язык интерфейса YouTube (`hl`) и страна выдачи (`gl`). */
     fun setLocale(language: String, country: String) {
-        localization = Localization(language)
+        localization = localizationFor(language, country)
         contentCountry = ContentCountry(country)
         NewPipe.setupLocalization(localization, contentCountry)
         synchronized(cache) { cache.clear() }
@@ -247,7 +247,16 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         val key = com.tube.player.youtube.videoId(url) ?: url
         if (!fresh) cache[key]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.let { return it.second }
         val details = io {
-            val extractor = yt.getStreamExtractor(url).fetched()
+            val extractor = try {
+                yt.getStreamExtractor(url).fetched()
+            } catch (e: org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException) {
+                // «Подтвердите, что вы не бот» — ещё раз с настройками NewPipe по умолчанию (en-GB), как до 0.4.9.
+                yt.getStreamExtractor(url).apply {
+                    forceLocalization(Localization.DEFAULT)
+                    forceContentCountry(contentCountry)
+                    fetchPage()
+                }
+            }
             val d = details(StreamInfo.getInfo(extractor))
             // NewPipe нарочно берёт исходное название (из ответа плеера); перевод автора — в ответе `next`.
             localizedTitle(extractor)?.takeIf { it != d.item.title }?.let { d.copy(item = d.item.copy(title = it)) } ?: d
@@ -311,6 +320,14 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         }
 
         private const val CACHE_MS = 30 * 60_000L
+        /**
+         * Язык всегда со страной: из неё NewPipe собирает User-Agent плеера visionOS («…like Mac OS X; RU)»).
+         * Без страны («ru») User-Agent выходил битым («…; )») — YouTube отвечал «подтвердите, что вы не бот»
+         * и не отдавал ни одного видео (0.4.9). Английский — en-GB: «en-RU» YouTube отклоняет (400).
+         */
+        fun localizationFor(language: String, country: String): Localization =
+            if (language == "en") Localization("en", "GB") else Localization(language, country)
+
         private val ChannelIdPattern = Regex("""/channel/(UC[A-Za-z0-9_-]{22})""")
         /** Вкладка Shorts канала — `params` как у сайта youtube.com. */
         private const val ShortsTab = "EgZzaG9ydHPyBgUKA5oBAA=="

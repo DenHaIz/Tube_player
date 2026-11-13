@@ -288,6 +288,17 @@ class LogicTest {
         assertTrue(ChannelListing.months(d(2021, 1, 1), d(2020, 1, 1), true).isEmpty())
     }
 
+    /** Язык для NewPipe всегда со страной: из неё собирается User-Agent плеера; без неё YouTube требует «не бот». */
+    @Test
+    fun playerUserAgentHasCountry() {
+        for ((lang, end) in listOf("ru" to "; RU)", "en" to "; GB)")) {
+            val ua = org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getVisionOsUserAgent(com.tube.player.youtube.Repository.localizationFor(lang, "RU"))
+            assertTrue(ua, ua.endsWith(end))
+        }
+        assertEquals("en-GB", com.tube.player.youtube.Repository.localizationFor("en", "RU").localizationCode)
+        assertEquals("ru-RU", com.tube.player.youtube.Repository.localizationFor("ru", "RU").localizationCode)
+    }
+
     @Test
     fun periodDatesParse() {
         assertEquals(java.time.LocalDate.of(2024, 2, 29), com.tube.player.ui.parseDigits("29022024"))

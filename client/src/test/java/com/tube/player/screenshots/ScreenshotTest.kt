@@ -428,6 +428,30 @@ class ScreenshotTest {
         shot("channel")
     }
 
+    /** Канал: «Популярные» за период — чип периода с датами и крестиком. */
+    @Test
+    fun channelFiltered() {
+        render { vm ->
+            val url = "https://www.youtube.com/channel/UC0"
+            vm.preloadChannel(url, ChannelItem(url, "Наука просто", "https://yt3/a0", 1_840_000, "Объясняем сложное простыми словами."), videos())
+            vm.channel(url).sort = com.tube.player.youtube.ChannelSort.Popular
+            vm.channel(url).range = com.tube.player.youtube.DateRange(java.time.LocalDate.of(2024, 1, 1), java.time.LocalDate.of(2024, 12, 31))
+            vm.push(Route.Channel(url, "Наука просто"))
+        }
+        shot("channel_filtered")
+    }
+
+    @Test
+    fun channelPeriodSheet() {
+        render(sheet = Sheet.Period) { vm ->
+            val url = "https://www.youtube.com/channel/UC0"
+            vm.preloadChannel(url, ChannelItem(url, "Наука просто", "https://yt3/a0", 1_840_000), videos())
+            vm.channel(url).range = com.tube.player.youtube.DateRange(java.time.LocalDate.of(2023, 3, 1), null)
+            vm.push(Route.Channel(url, "Наука просто"))
+        }
+        shot("channel_period_sheet")
+    }
+
     @Test
     fun library() {
         render { vm ->

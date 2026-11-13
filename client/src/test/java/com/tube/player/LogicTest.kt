@@ -18,6 +18,7 @@ import com.tube.player.sponsorblock.SponsorBlock
 import com.tube.player.sponsorblock.SponsorCategory
 import com.tube.player.ui.Format
 import com.tube.player.ui.MainViewModel
+import com.tube.player.youtube.ChannelListing
 import com.tube.player.youtube.VideoItem
 import com.tube.player.youtube.videoId
 import com.tube.ui.i18n.AppLanguage
@@ -272,5 +273,26 @@ class LogicTest {
         val a = listOf(VideoItem("a1", "a1"), VideoItem("a2", "a2"))
         val b = listOf(VideoItem("b1", "b1"), VideoItem("a1", "dup"))
         assertEquals(listOf("a1", "b1", "a2"), MainViewModel.interleave(listOf(a, b)).map { it.url })
+    }
+
+    @Test
+    fun channelPeriodQueryAndMonths() {
+        fun d(y: Int, m: Int, day: Int) = java.time.LocalDate.of(y, m, day)
+        // after: — включительно, before: — не включая: конец периода +1 день.
+        assertEquals("after:2019-03-01 before:2019-05-01", ChannelListing.query(d(2019, 3, 1), d(2019, 4, 30)))
+        assertEquals("after:2020-02-29", ChannelListing.query(d(2020, 2, 29), null))
+        assertEquals("before:2021-01-01", ChannelListing.query(null, d(2020, 12, 31)))
+        val months = ChannelListing.months(d(2019, 11, 20), d(2020, 2, 3), newestFirst = true).map { it.toString() }
+        assertEquals(listOf("2020-02", "2020-01", "2019-12", "2019-11"), months)
+        assertEquals("2019-11", ChannelListing.months(d(2019, 11, 20), d(2020, 2, 3), newestFirst = false).first().toString())
+        assertTrue(ChannelListing.months(d(2021, 1, 1), d(2020, 1, 1), true).isEmpty())
+    }
+
+    @Test
+    fun periodDatesParse() {
+        assertEquals(java.time.LocalDate.of(2024, 2, 29), com.tube.player.ui.parseDigits("29022024"))
+        assertNull(com.tube.player.ui.parseDigits("29022023"))
+        assertNull(com.tube.player.ui.parseDigits("3112202"))
+        assertEquals("01.02.2024", com.tube.player.ui.formatDate(java.time.LocalDate.of(2024, 2, 1)))
     }
 }

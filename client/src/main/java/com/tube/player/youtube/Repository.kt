@@ -56,6 +56,8 @@ data class VideoDetails(
 
 /** Канал: шапка и первая страница видео. */
 data class ChannelPage(
+    /** id канала (UC…) — для запросов InnerTube (сортировка, период). */
+    val id: String,
     val channel: ChannelItem,
     val banner: String?,
     val videos: Paged<FeedItem>,
@@ -109,6 +111,7 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         val tab = info.tabs.firstOrNull { ChannelTabs.VIDEOS in it.contentFilters } ?: info.tabs.firstOrNull()
         val videos = tab?.let { runCatching { ChannelTabInfo.getInfo(yt, it) }.getOrNull() }
         ChannelPage(
+            id = info.id,
             channel = ChannelItem(info.url, info.name, info.avatars.best(176)?.let { sharpAvatar(it, 264) }, info.subscriberCount, info.description),
             banner = info.banners.best(1080),
             videos = Paged(videos?.relatedItems?.mapNotNull { it.toFeedItem() }.orEmpty(), videos?.nextPage),

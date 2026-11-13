@@ -16,6 +16,10 @@ import com.tube.player.player.YoutubeDataSource
 import com.tube.player.youtube.Kiosk
 import com.tube.player.youtube.NewPipeDownloader
 import com.tube.player.youtube.Repository
+import com.tube.player.youtube.ChannelListing
+import com.tube.player.youtube.ChannelSort
+import com.tube.player.youtube.DateRange
+import com.tube.player.youtube.NewPipeBrowse
 import com.tube.player.youtube.VideoItem
 import kotlinx.coroutines.runBlocking
 import org.junit.AfterClass
@@ -106,6 +110,43 @@ class PipelineNetworkTest {
             assertTrue(r.id, read >= 64 * 1024)
         }
         assertTrue(relay.hosts.any { it.endsWith("googlevideo.com") })
+    }
+
+    /** Сортировка канала чипами YouTube и период через поиск по каналу с датами (Fireship, канал с 2017 года). */
+    @Test
+    fun channelSortAndPeriod() = runBlocking {
+        assumeTrue(System.getProperty("network") == "true")
+        val id = "UCsBjURrPoezykLs9EqgamOA"
+        val popular = ChannelListing(NewPipeBrowse, id, ChannelSort.Popular, DateRange())
+        val pop = popular.first().items.filterIsInstance<VideoItem>()
+        println("popular: ${pop.take(3).map { it.title + " " + it.views }}")
+        assertTrue(pop.size >= 10 && pop.first().views > 1_000_000)
+        assertTrue(popular.more().items.isNotEmpty())
+        val oldest = ChannelListing(NewPipeBrowse, id, ChannelSort.Oldest, DateRange()).first().items.filterIsInstance<VideoItem>()
+        println("oldest: ${oldest.take(3).map { it.title + " " + it.uploaded }}")
+        assertTrue(oldest.isNotEmpty() && oldest.first().uploadedAt < System.currentTimeMillis() - 5L * 365 * 86_400_000)
+
+        // Март–апрель 2019: «Svelte 3 Reaction» — 25 апреля, «Predict Horse Races with BigQuery» — 15 марта.
+        val range = DateRange(java.time.LocalDate.of(2019, 3, 1), java.time.LocalDate.of(2019, 4, 30))
+        val newest = ChannelListing(NewPipeBrowse, id, ChannelSort.Newest, range)
+        val all = ArrayList(newest.first().items.filterIsInstance<VideoItem>())
+        repeat(3) { all += newest.more().items.filterIsInstance<VideoItem>() }
+        val titles = all.map { it.title }
+        println("2019-03..04 newest: ${titles.size} $titles")
+        val svelte = titles.indexOfFirst { it.startsWith("Svelte 3") }
+        val horses = titles.indexOfFirst { it.startsWith("Predict Horse Races") }
+        assertTrue("апрель раньше марта: $svelte < $horses", svelte in 0 until horses)
+        val old = ChannelListing(NewPipeBrowse, id, ChannelSort.Oldest, range).first().items.map { (it as VideoItem).title }
+        println("2019-03..04 oldest: $old")
+        val oldHorses = old.indexOfFirst { it.startsWith("Predict Horse Races") }
+        val oldSvelte = old.indexOfFirst { it.startsWith("Svelte 3") }.let { if (it < 0) Int.MAX_VALUE else it }
+        assertTrue("старые — с марта: $oldHorses < $oldSvelte", oldHorses in 0 until oldSvelte)
+        // Части по 10 дней: 15 марта раньше 25 марта («RxJS Top Ten»).
+        assertTrue("15.03 раньше 25.03", oldHorses < old.indexOfFirst { it.startsWith("RxJS Top Ten") })
+        val popRange = ChannelListing(NewPipeBrowse, id, ChannelSort.Popular, range).first().items.filterIsInstance<VideoItem>()
+        println("2019-03..04 popular: ${popRange.take(3).map { it.title + " " + it.views }}")
+        assertTrue(popRange.zipWithNext().all { (a, b) -> a.views >= b.views })
+        assertTrue(popRange.map { it.title }.toSet() == titles.toSet() || popRange.size >= titles.size)
     }
 
     @Test

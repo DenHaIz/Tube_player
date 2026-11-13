@@ -85,7 +85,7 @@ import com.tube.ui.theme.TubeTheme
 import com.tube.strategy.NetworkKind
 import dev.chrisbanes.haze.rememberHazeState
 
-enum class Sheet { None, Settings, Bypass, Quality, Account, Update }
+enum class Sheet { None, Settings, Bypass, Quality, Account, Update, Period }
 
 /** То, что умеет только активность: PiP, полный экран, «поделиться», разрешения. */
 class ShellActions(
@@ -218,8 +218,12 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                             ChannelScreen(
                                 target.name, model.header, model.banner, model.feed.state,
                                 subscribed = subscriptions.any { com.tube.player.data.Library.sameChannel(it.channel.url, target.url) },
-                                onSubscribe = vm::toggleSubscription, onOpen = vm::open, onMore = model.feed::loadMore, onRetry = model.feed::refresh,
+                                onSubscribe = vm::toggleSubscription, onOpen = vm::open, onMore = { model.feed.loadMore() }, onRetry = { model.feed.refresh() },
                                 padding = padding, hideShorts = hideShorts,
+                                sort = model.sort, range = model.range,
+                                onSort = { vm.orderChannel(model, sort = it) },
+                                onPeriod = { sheet = Sheet.Period },
+                                onClearPeriod = { vm.orderChannel(model, range = com.tube.player.youtube.DateRange()) },
                             )
                         }
                         is Route.Playlist -> {
@@ -353,6 +357,14 @@ fun PlayerShell(vm: MainViewModel, actions: ShellActions, pip: Boolean, fullscre
                         sheet = Sheet.None
                     },
                 )
+            }
+            GlassSheet(sheet == Sheet.Period, close, solid = true, dockToSide = true) {
+                // Период видео открытого канала (лист открывается только со страницы канала).
+                val channel = (route as? Route.Channel)?.let { vm.channel(it.url) }
+                PeriodSheet(channel?.range ?: com.tube.player.youtube.DateRange(), onApply = { r ->
+                    channel?.let { vm.orderChannel(it, range = r) }
+                    sheet = Sheet.None
+                })
             }
             GlassSheet(sheet == Sheet.Account, close, solid = true, dockToSide = true) {
                 AccountSheet(

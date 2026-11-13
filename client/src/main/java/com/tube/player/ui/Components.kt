@@ -441,18 +441,36 @@ fun <T> ChipsRow(options: List<T>, selected: T, label: @Composable (T) -> String
     ) {
         items(options.size) { i ->
             val option = options[i]
-            val active = option == selected
-            val bg by animateColorAsState(if (active) colors.textPrimary else colors.chip, label = "chip")
-            val fg by animateColorAsState(if (active) colors.background else colors.textPrimary, label = "chipText")
-            Box(
-                Modifier
-                    .height(32.dp)
-                    .bouncyClickable(pressedScale = 0.94f) { onSelect(option) }
-                    .background(bg, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label(option), style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium), color = fg)
+            FilterChip(label(option), option == selected, { onSelect(option) })
+        }
+    }
+}
+
+/**
+ * Чип YouTube: высота 32dp, скругление 8dp, выбранный — инвертированный. [icon] — слева;
+ * [onClear] — крестик справа (сбросить фильтр), нажатие на сам чип — [onClick].
+ */
+@Composable
+fun FilterChip(text: String, active: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, onClear: (() -> Unit)? = null) {
+    val colors = TubeTheme.colors
+    val bg by animateColorAsState(if (active) colors.textPrimary else colors.chip, label = "chip")
+    val fg by animateColorAsState(if (active) colors.background else colors.textPrimary, label = "chipText")
+    Row(
+        modifier
+            .height(32.dp)
+            .bouncyClickable(pressedScale = 0.94f, onClick = onClick)
+            .background(bg, RoundedCornerShape(8.dp))
+            .padding(start = if (icon != null) 10.dp else 12.dp, end = if (onClear != null) 4.dp else 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(icon, null, tint = fg, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(text, style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Medium), color = fg, maxLines = 1)
+        if (onClear != null) {
+            Box(Modifier.padding(start = 2.dp).size(28.dp).bouncyClickable(pressedScale = 0.85f, onClick = onClear), contentAlignment = Alignment.Center) {
+                Icon(TubeIcons.Close, tr("Сбросить", "Clear"), tint = fg, modifier = Modifier.size(16.dp))
             }
         }
     }

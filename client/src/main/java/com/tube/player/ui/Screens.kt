@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import com.tube.player.data.HistoryEntry
 import com.tube.player.data.Subscription
 import com.tube.player.youtube.ChannelItem
+import com.tube.player.youtube.ChannelSort
+import com.tube.player.youtube.DateRange
 import com.tube.player.youtube.FeedItem
 import com.tube.player.youtube.PlaylistItem
 import com.tube.player.youtube.SearchFilter
@@ -273,7 +275,7 @@ private fun LazyGridScope.historyItems(list: List<HistoryEntry>, prefix: String,
     }
 }
 
-/** Канал: баннер, аватар, подписка и видео. */
+/** Канал: баннер, аватар, подписка, порядок видео (сортировка и период) и сами видео. */
 @Composable
 fun ChannelScreen(
     name: String,
@@ -287,9 +289,15 @@ fun ChannelScreen(
     onRetry: () -> Unit,
     padding: PaddingValues,
     hideShorts: Boolean,
+    sort: ChannelSort = ChannelSort.Newest,
+    range: DateRange = DateRange(),
+    onSort: (ChannelSort) -> Unit = {},
+    onPeriod: () -> Unit = {},
+    onClearPeriod: () -> Unit = {},
 ) {
     val lang = LocalLanguage.current
-    FeedGrid(state, onOpen, onMore, onRetry, gridPadding(padding), hideShorts = hideShorts, empty = tr("Видео нет", "No videos")) {
+    val empty = if (range.active) tr("За этот период видео нет", "No videos in these dates") else tr("Видео нет", "No videos")
+    FeedGrid(state, onOpen, onMore, onRetry, gridPadding(padding), hideShorts = hideShorts, empty = empty) {
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                 if (banner != null) {
@@ -313,6 +321,8 @@ fun ChannelScreen(
                     Spacer(Modifier.height(12.dp))
                     Box(Modifier.padding(horizontal = 12.dp).fillMaxWidth()) { SubscribeWide(subscribed) { onSubscribe(header) } }
                 }
+                Spacer(Modifier.height(16.dp))
+                ChannelFilters(sort, range, onSort, onPeriod, onClearPeriod)
             }
         }
     }

@@ -78,6 +78,7 @@ object TubeIcons {
     val Comment by lazy { icon("Comment", "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z") }
     val Bell by lazy { icon("Bell", "M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20.5a2 2 0 0 0 4 0") }
     val Trash by lazy { icon("Trash", "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13") }
+    val Calendar by lazy { icon("Calendar", "M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM4 10h16M8 3v4M16 3v4") }
 
     private fun icon(name: String, pathData: String): ImageVector =
         ImageVector.Builder(

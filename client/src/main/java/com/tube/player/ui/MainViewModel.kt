@@ -10,6 +10,9 @@ import androidx.lifecycle.viewModelScope
 import com.tube.player.PlayerApp
 import com.tube.player.account.Account
 import com.tube.player.youtube.ChannelItem
+import com.tube.player.youtube.ChannelListing
+import com.tube.player.youtube.ChannelSort
+import com.tube.player.youtube.DateRange
 import com.tube.player.youtube.FeedItem
 import com.tube.player.youtube.Kiosk
 import com.tube.player.youtube.Paged
@@ -41,10 +44,23 @@ sealed interface Route {
     data object Login : Route
 }
 
-/** Шапка канала и его видео. */
-class ChannelModel(val url: String, val feed: Feed) {
+/** Шапка канала, его видео и их порядок (сортировка, период). */
+class ChannelModel(val url: String) {
     var header by mutableStateOf<ChannelItem?>(null)
     var banner by mutableStateOf<String?>(null)
+    /** id канала (UC…) — известен после первой загрузки. */
+    var id: String? = null
+    var sort by mutableStateOf(ChannelSort.Newest)
+        internal set
+    var range by mutableStateOf(DateRange())
+        internal set
+    private val current = mutableStateOf<Feed?>(null)
+    /** Лента видео; новая при смене сортировки или периода. */
+    var feed: Feed
+        get() = current.value!!
+        internal set(value) {
+            current.value = value
+        }
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -161,21 +177,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Каналы и плейлисты
     private val channels = mutableMapOf<String, ChannelModel>()
 
-    fun channel(url: String): ChannelModel = channels.getOrPut(url) {
-        var model: ChannelModel? = null
-        var tab: org.schabi.newpipe.extractor.linkhandler.ListLinkHandler? = null
-        val feed = Feed(
+    fun channel(url: String): ChannelModel = channels.getOrPut(url) { ChannelModel(url).also { it.feed = channelFeed(it) } }
+
+    /**
+     * Видео канала: «Новые» без периода — вкладка «Видео» через NewPipe (как раньше); остальное — [ChannelListing]
+     * (чипы сортировки YouTube и поиск по каналу с датами). Шапка канала грузится вместе с первой страницей.
+     */
+    private fun channelFeed(model: ChannelModel): Feed {
+        suspend fun page() = repo.channel(model.url).also {
+            model.header = it.channel
+            model.banner = it.banner
+            model.id = it.id
+        }
+        val sort = model.sort
+        val range = model.range
+        if (sort == ChannelSort.Newest && !range.active) {
+            var tab: org.schabi.newpipe.extractor.linkhandler.ListLinkHandler? = null
+            return Feed(
+                viewModelScope,
+                first = { page().also { tab = it.videosTab }.videos },
+                more = { p -> tab?.let { repo.channelMore(it, p) } ?: Paged(emptyList(), null) },
+            )
+        }
+        var listing: ChannelListing? = null
+        return Feed(
             viewModelScope,
             first = {
-                val page = repo.channel(url)
-                model?.header = page.channel
-                model?.banner = page.banner
-                tab = page.videosTab
-                page.videos
+                val id = model.id ?: page().id
+                ChannelListing(com.tube.player.youtube.NewPipeBrowse, id, sort, range).also { listing = it }.first()
             },
-            more = { page -> tab?.let { repo.channelMore(it, page) } ?: Paged(emptyList(), null) },
+            more = { listing?.more() ?: Paged(emptyList(), null) },
         )
-        ChannelModel(url, feed).also { model = it }
+    }
+
+    /** Сменить сортировку или период видео канала — лента грузится заново. */
+    fun orderChannel(model: ChannelModel, sort: ChannelSort = model.sort, range: DateRange = model.range) {
+        if (sort == model.sort && range == model.range) return
+        model.sort = sort
+        model.range = range
+        model.feed = channelFeed(model).also { it.refresh() }
     }
 
     private val playlists = mutableMapOf<String, Feed>()
@@ -351,7 +391,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     internal fun preloadChannel(url: String, header: ChannelItem, items: List<FeedItem>) {
-        channels[url] = ChannelModel(url, Feed.of(viewModelScope, items)).apply { this.header = header }
+        channels[url] = ChannelModel(url).apply {
+            feed = Feed.of(viewModelScope, items)
+            this.header = header
+        }
     }
 
     companion object {

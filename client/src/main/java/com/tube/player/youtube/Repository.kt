@@ -1,6 +1,7 @@
 package com.tube.player.youtube
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.NewPipe
 import org.schabi.newpipe.extractor.Page
@@ -67,49 +68,76 @@ data class ChannelPage(
 /**
  * Данные YouTube через NewPipeExtractor. Вся сеть — через [Downloader] приложения (byedpi).
  * Методы блокирующие внутри, поэтому выполняются на Dispatchers.IO.
+ *
+ * **Язык — в каждом запросе явно.** NewPipe 0.27 знает для YouTube единственный язык (`en-GB`) и любой другой
+ * молча подменяет им: названия видео (переводы авторов), даты и «Лбс → кг» приходили по-английски, даже при
+ * русском в настройках. Поэтому каждый экстрактор создаётся здесь с `forceLocalization`/`forceContentCountry`,
+ * а «ещё» берётся тем же способом (статические `getMoreItems` NewPipe снова взяли бы `en-GB`).
  */
 class Repository(downloader: Downloader, language: String = "ru", country: String = "RU") {
     private val yt get() = ServiceList.YouTube
 
+    @Volatile private var localization = Localization(language)
+    @Volatile private var contentCountry = ContentCountry(country)
+
     init {
-        NewPipe.init(downloader, Localization(language, country), ContentCountry(country))
+        NewPipe.init(downloader, localization, contentCountry)
     }
 
+    /** Язык интерфейса YouTube (`hl`: «ru»/«en» — без страны: «en-RU» YouTube отклоняет) и страна выдачи. */
     fun setLocale(language: String, country: String) {
-        NewPipe.setupLocalization(Localization(language, country), ContentCountry(country))
+        localization = Localization(language)
+        contentCountry = ContentCountry(country)
+        NewPipe.setupLocalization(localization, contentCountry)
+        synchronized(cache) { cache.clear() }
     }
+
+    /** Экстрактор с языком приложения. */
+    private fun <E : org.schabi.newpipe.extractor.Extractor> E.localized(): E = apply {
+        forceLocalization(localization)
+        forceContentCountry(contentCountry)
+    }
+
+    private fun <E : org.schabi.newpipe.extractor.Extractor> E.fetched(): E = localized().apply { fetchPage() }
 
     suspend fun search(query: String, filter: SearchFilter = SearchFilter.All, page: Page? = null): Paged<FeedItem> = io {
         val handler = yt.searchQHFactory.fromQuery(query, listOf(filter.newPipe), "")
         if (page == null) {
-            val info = SearchInfo.getInfo(yt, handler)
+            val info = SearchInfo.getInfo(yt.getSearchExtractor(handler).fetched())
             Paged(info.relatedItems.mapNotNull { it.toFeedItem() }, info.nextPage)
         } else {
-            val more = SearchInfo.getMoreItems(yt, handler, page)
+            val more = yt.getSearchExtractor(handler).localized().getPage(page)
             Paged(more.items.mapNotNull { it.toFeedItem() }, more.nextPage)
         }
     }
 
     suspend fun suggestions(query: String): List<String> = io {
-        if (query.isBlank()) emptyList() else yt.suggestionExtractor.suggestionList(query)
+        if (query.isBlank()) {
+            emptyList()
+        } else {
+            yt.suggestionExtractor.apply {
+                forceLocalization(localization)
+                forceContentCountry(contentCountry)
+            }.suggestionList(query)
+        }
     }
 
     suspend fun kiosk(kiosk: Kiosk, page: Page? = null): Paged<FeedItem> = io {
-        val list = yt.kioskList
-        val url = list.getListLinkHandlerFactoryByType(kiosk.id).fromId(kiosk.id).url
+        val extractor = yt.kioskList.getExtractorById(kiosk.id, page, localization).localized()
         if (page == null) {
-            val info = KioskInfo.getInfo(yt, url)
+            extractor.fetchPage()
+            val info = KioskInfo.getInfo(extractor)
             Paged(info.relatedItems.mapNotNull { it.toFeedItem() }, info.nextPage)
         } else {
-            val more = KioskInfo.getMoreItems(yt, url, page)
+            val more = extractor.getPage(page)
             Paged(more.items.mapNotNull { it.toFeedItem() }, more.nextPage)
         }
     }
 
     suspend fun channel(url: String): ChannelPage = io {
-        val info = ChannelInfo.getInfo(yt, url)
+        val info = ChannelInfo.getInfo(yt.getChannelExtractor(url).fetched())
         val tab = info.tabs.firstOrNull { ChannelTabs.VIDEOS in it.contentFilters } ?: info.tabs.firstOrNull()
-        val videos = tab?.let { runCatching { ChannelTabInfo.getInfo(yt, it) }.getOrNull() }
+        val videos = tab?.let { runCatching { ChannelTabInfo.getInfo(yt.getChannelTabExtractor(it).fetched()) }.getOrNull() }
         ChannelPage(
             id = info.id,
             channel = ChannelItem(info.url, info.name, info.avatars.best(176)?.let { sharpAvatar(it, 264) }, info.subscriberCount, info.description),
@@ -120,17 +148,17 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
     }
 
     suspend fun channelMore(tab: ListLinkHandler, page: Page): Paged<FeedItem> = io {
-        val more = ChannelTabInfo.getMoreItems(yt, tab, page)
+        val more = yt.getChannelTabExtractor(tab).localized().getPage(page)
         Paged(more.items.mapNotNull { it.toFeedItem() }, more.nextPage)
     }
 
     suspend fun playlist(url: String, page: Page? = null): Pair<PlaylistItem, Paged<FeedItem>> = io {
-        val info = PlaylistInfo.getInfo(yt, url)
+        val info = PlaylistInfo.getInfo(yt.getPlaylistExtractor(url).fetched())
         val header = PlaylistItem(info.url, info.name, info.thumbnails.best(), info.streamCount, info.uploaderName)
         if (page == null) {
             header to Paged(info.relatedItems.mapNotNull { it.toFeedItem() }, info.nextPage)
         } else {
-            val more = PlaylistInfo.getMoreItems(yt, url, page)
+            val more = yt.getPlaylistExtractor(url).localized().getPage(page)
             header to Paged(more.items.mapNotNull { it.toFeedItem() }, more.nextPage)
         }
     }
@@ -138,10 +166,10 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
     /** Комментарии видео: первая страница (с числом комментариев) или следующая/ответы по [page]. */
     suspend fun comments(url: String, page: Page? = null): CommentsPage = io {
         if (page == null) {
-            val info = org.schabi.newpipe.extractor.comments.CommentsInfo.getInfo(yt, url)
+            val info = org.schabi.newpipe.extractor.comments.CommentsInfo.getInfo(yt.getCommentsExtractor(url).fetched())
             CommentsPage(info.relatedItems.map(::comment), info.nextPage, info.commentsCount, info.isCommentsDisabled)
         } else {
-            val more = org.schabi.newpipe.extractor.comments.CommentsInfo.getMoreItems(yt, url, page)
+            val more = yt.getCommentsExtractor(url).localized().getPage(page)
             CommentsPage(more.items.map(::comment), more.nextPage, -1, false)
         }
     }
@@ -167,9 +195,48 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         )
     }
 
-    /** Свежие видео канала по RSS — лёгкий запрос для ленты подписок без аккаунта. */
-    suspend fun feed(channelUrl: String): List<VideoItem> = io {
-        FeedInfo.getInfo(yt, channelUrl).relatedItems.mapNotNull { it.toFeedItem() as? VideoItem }
+    /**
+     * Свежие видео канала для ленты подписок без аккаунта: RSS (точные даты) и, параллельно, вкладка «Видео»
+     * на языке приложения — RSS отдаёт названия только в оригинале, переводы авторов берутся со вкладки.
+     * Вкладка не загрузилась — остаются названия из RSS.
+     */
+    suspend fun feed(channelUrl: String): List<VideoItem> = kotlinx.coroutines.coroutineScope {
+        val translated = async { runCatching { localizedTitles(channelUrl) }.getOrDefault(emptyMap()) }
+        val rss = io { FeedInfo.getInfo(yt, channelUrl).relatedItems.mapNotNull { it.toFeedItem() as? VideoItem } }
+        val titles = translated.await()
+        rss.map { v -> titles[v.id]?.let { v.copy(title = it) } ?: v }
+    }
+
+    /**
+     * id видео → название на языке приложения с вкладок «Видео» и Shorts (первые страницы, параллельно) —
+     * в RSS есть и то и другое. Только для ссылок /channel/UC…; вкладка не загрузилась — без неё.
+     */
+    private suspend fun localizedTitles(channelUrl: String): Map<String, String> = kotlinx.coroutines.coroutineScope {
+        val id = ChannelIdPattern.find(channelUrl)?.groupValues?.get(1) ?: return@coroutineScope emptyMap()
+        val videos = async {
+            runCatching {
+                val root = NewPipeBrowse.browse(mapOf("browseId" to id, "params" to ChannelListing.VideosTab))
+                com.tube.player.account.InnerTube.items(root).filterIsInstance<VideoItem>().associate { it.id to it.title }
+            }.getOrDefault(emptyMap())
+        }
+        val shorts = async {
+            runCatching {
+                val root = NewPipeBrowse.browse(mapOf("browseId" to id, "params" to ShortsTab))
+                val found = HashMap<String, String>()
+                com.tube.player.account.InnerTube.walk(root) { key, value ->
+                    if (key == "shortsLockupViewModel") {
+                        val vid = value.getObject("onTap").getObject("innertubeCommand").getObject("reelWatchEndpoint").getString("videoId")
+                        val title = value.getObject("overlayMetadata").getObject("primaryText").getString("content")
+                        if (!vid.isNullOrEmpty() && !title.isNullOrEmpty()) found[vid] = title
+                        false
+                    } else {
+                        true
+                    }
+                }
+                found
+            }.getOrDefault(emptyMap())
+        }
+        shorts.await() + videos.await()
     }
 
     /**
@@ -179,7 +246,12 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
     suspend fun video(url: String, fresh: Boolean = false): VideoDetails {
         val key = com.tube.player.youtube.videoId(url) ?: url
         if (!fresh) cache[key]?.takeIf { System.currentTimeMillis() - it.first < CACHE_MS }?.let { return it.second }
-        val details = io { details(StreamInfo.getInfo(yt, url)) }
+        val details = io {
+            val extractor = yt.getStreamExtractor(url).fetched()
+            val d = details(StreamInfo.getInfo(extractor))
+            // NewPipe нарочно берёт исходное название (из ответа плеера); перевод автора — в ответе `next`.
+            localizedTitle(extractor)?.takeIf { it != d.item.title }?.let { d.copy(item = d.item.copy(title = it)) } ?: d
+        }
         synchronized(cache) {
             cache[key] = System.currentTimeMillis() to details
             while (cache.size > 30) cache.remove(cache.keys.first())
@@ -188,6 +260,25 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
     }
 
     private val cache = java.util.Collections.synchronizedMap(LinkedHashMap<String, Pair<Long, VideoDetails>>())
+
+    /**
+     * Название на языке запроса из `videoPrimaryInfoRenderer` ответа `next` (поле `nextResponse` экстрактора
+     * NewPipe закрыто — берём рефлексией; в R8 оно сохранено правилом в proguard-rules.pro). Не вышло — null.
+     */
+    private fun localizedTitle(extractor: org.schabi.newpipe.extractor.stream.StreamExtractor): String? = runCatching {
+        val field = extractor.javaClass.getDeclaredField("nextResponse").apply { isAccessible = true }
+        val next = field.get(extractor) as? com.grack.nanojson.JsonObject ?: return null
+        var title: String? = null
+        com.tube.player.account.InnerTube.walk(next) { key, value ->
+            if (title == null && key == "videoPrimaryInfoRenderer") {
+                title = org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getTextFromObject(value.getObject("title"))
+                false
+            } else {
+                title == null
+            }
+        }
+        title?.takeIf { it.isNotBlank() }
+    }.getOrNull()
 
     companion object {
         fun details(info: StreamInfo): VideoDetails {
@@ -220,6 +311,9 @@ class Repository(downloader: Downloader, language: String = "ru", country: Strin
         }
 
         private const val CACHE_MS = 30 * 60_000L
+        private val ChannelIdPattern = Regex("""/channel/(UC[A-Za-z0-9_-]{22})""")
+        /** Вкладка Shorts канала — `params` как у сайта youtube.com. */
+        private const val ShortsTab = "EgZzaG9ydHPyBgUKA5oBAA=="
 
         private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
     }

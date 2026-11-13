@@ -29,15 +29,24 @@ fun interface Browse {
     suspend fun browse(fields: Map<String, String>): JsonObject
 }
 
-/** Browse через NewPipe — тот же Downloader, что и у всего остального (byedpi, DoH, cookie согласия). */
+/**
+ * Browse через NewPipe — тот же Downloader, что и у всего остального (byedpi, DoH, cookie согласия).
+ * Поле [VISITOR] кладётся в `context.client.visitorData`: токены продолжений (чипы сортировки) выданы сессии
+ * посетителя, и без неё YouTube иногда отвечает пустым списком.
+ */
 val NewPipeBrowse = Browse { fields ->
     withContext(Dispatchers.IO) {
         val loc = NewPipe.getPreferredLocalization()
-        val body = YoutubeParsingHelper.prepareDesktopJsonBuilder(loc, NewPipe.getPreferredContentCountry())
-        fields.forEach { (k, v) -> body.value(k, v) }
-        YoutubeParsingHelper.getJsonPostResponse("browse", JsonWriter.string(body.done()).toByteArray(Charsets.UTF_8), loc)
+        val builder = YoutubeParsingHelper.prepareDesktopJsonBuilder(loc, NewPipe.getPreferredContentCountry())
+        fields.forEach { (k, v) -> if (k != VISITOR) builder.value(k, v) }
+        val body = builder.done()
+        fields[VISITOR]?.let { body.getObject("context").getObject("client")["visitorData"] = it }
+        YoutubeParsingHelper.getJsonPostResponse("browse", JsonWriter.string(body).toByteArray(Charsets.UTF_8), loc)
     }
 }
+
+/** Ключ в полях [Browse]: visitorData сессии (не поле тела, а часть контекста клиента). */
+const val VISITOR = "\u0000visitorData"
 
 /**
  * Видео канала с сортировкой и периодом — то, чего нет в NewPipe.
@@ -68,6 +77,8 @@ class ChannelListing(
 
     /** Продолжение текущего списка (или текущего месяца). */
     private var token: String? = null
+    /** Сессия посетителя из первого ответа — для продолжений. */
+    private var visitor: String? = null
     /** Трети месяцев периода, ещё не показанные, — в порядке показа. */
     private val parts = ArrayDeque<Part>()
     /** Первые страницы частей, загруженные заранее (параллельно), но ещё не показанные. */
@@ -121,14 +132,27 @@ class ChannelListing(
         return Paged(chunk.items, chunk.next?.let { More })
     }
 
-    /** Без периода: чип нужной сортировки; у канала с парой видео чипов нет — сортируем сами всё, что есть. */
+    /**
+     * Без периода: чип нужной сортировки; у канала с парой видео чипов нет — сортируем сами всё, что есть.
+     * По чипу YouTube иногда отвечает пустым списком (видео при этом есть) — тогда заново, со свежими токенами;
+     * не вышло за [ChipAttempts] — ошибка с «Повторить», а не ложное «Видео нет».
+     */
     private suspend fun sorted(): Paged<FeedItem> {
-        val root = api.browse(mapOf("browseId" to channelId, "params" to VideosTab))
-        val chips = chips(root)
-        if (chips.size >= 3) {
+        var root = JsonObject()
+        for (attempt in 0 until ChipAttempts) {
+            if (attempt > 0) kotlinx.coroutines.delay(500L * attempt)
+            visitor = null
+            root = api.browse(mapOf("browseId" to channelId, "params" to VideosTab))
+            visitor = visitorOf(root)
+            val chips = chips(root)
+            if (chips.size < 3) break
             val chunk = continuation(chips[sort.ordinal])
-            token = chunk.next
-            return Paged(chunk.items, chunk.next?.let { More })
+            if (chunk.items.isNotEmpty()) {
+                token = chunk.next
+                return Paged(chunk.items, chunk.next?.let { More })
+            }
+            if (parse(root).items.isEmpty()) return Paged(emptyList(), null)
+            if (attempt == ChipAttempts - 1) throw java.io.IOException(emptyAnswer())
         }
         val newest = all(parse(root))
         return Paged(
@@ -200,9 +224,21 @@ class ChannelListing(
         return maxOf(YoutubeStart, Instant.ofEpochMilli(at).atZone(ZoneOffset.UTC).toLocalDate().minusYears(1).withDayOfMonth(1))
     }
 
-    private suspend fun search(query: String) = parse(api.browse(mapOf("browseId" to channelId, "params" to SearchTab, "query" to query)))
+    private suspend fun search(query: String): Chunk {
+        val root = api.browse(mapOf("browseId" to channelId, "params" to SearchTab, "query" to query) + visitorField())
+        if (visitor == null) visitor = visitorOf(root)
+        return parse(root)
+    }
 
-    private suspend fun continuation(token: String) = parse(api.browse(mapOf("continuation" to token)))
+    private suspend fun continuation(token: String) = parse(api.browse(mapOf("continuation" to token) + visitorField()))
+
+    private fun visitorField(): Map<String, String> = visitor?.let { mapOf(VISITOR to it) }.orEmpty()
+
+    private fun emptyAnswer() = if (NewPipe.getPreferredLocalization().languageCode == "en") {
+        "YouTube returned an empty list, try again"
+    } else {
+        "YouTube вернул пустой список — повторите"
+    }
 
     /** Все страницы списка (не больше [PopularPages]) — для сортировки на телефоне. */
     private suspend fun all(first: Chunk): List<FeedItem> {
@@ -229,6 +265,10 @@ class ChannelListing(
         private const val Parallel = 6
         private const val PopularPages = 8
         val YoutubeStart: LocalDate = LocalDate.of(2005, 4, 1)
+        private const val ChipAttempts = 3
+
+        private fun visitorOf(root: JsonObject): String? =
+            root.getObject("responseContext").getString("visitorData")?.takeIf { it.isNotEmpty() }
 
         /** Отметка «есть ещё» для Feed: продолжение хранит сам [ChannelListing]. */
         private val More = Page("channel-listing")

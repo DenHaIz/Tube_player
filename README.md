@@ -2,7 +2,7 @@
 
 Два Android-приложения для YouTube в России — по принципу ByeDPI / zapret, без внешних серверов.
 
-- **Tube Player** (`client`) — свой лёгкий клиент YouTube со встроенным обходом DPI: VPN не нужен, работает рядом с любым VPN. Интерфейс и жесты как в YouTube (телефон и планшет — стоя и боком, с боковыми вкладками и панелями), без рекламы, SponsorBlock, дизлайки, комментарии, лайки, фон, PiP, плавающее окно и мини-плеер с видео, выбор качества и скорости, HD-превью, AMOLED-тема, история и подписки без аккаунта; вход в Google — по желанию; обновление ленты потягиванием вниз; самообновление с GitHub и зеркал. Релизы: https://github.com/DenHaIz/Tube_player/releases
+- **Tube Player** (`client`) — свой лёгкий клиент YouTube со встроенным обходом DPI: VPN не нужен, работает рядом с любым VPN. Интерфейс и жесты как в YouTube (телефон и планшет — стоя и боком, на планшете боком управление в панели у правого края), плавный переход во весь экран, удержание справа — ×2, без рекламы, SponsorBlock, дизлайки, комментарии, лайки, фон, PiP, плавающее окно и мини-плеер с видео, выбор качества и скорости, HD-превью, AMOLED-тема, история и подписки без аккаунта; вход в Google — по желанию; обновление ленты потягиванием вниз; самообновление с GitHub и зеркал. Релизы: https://github.com/DenHaIz/Tube_player/releases
 - **Tube** (`app`) — локальный VPN, который пускает через обход только выбранные приложения (YouTube, ReVanced, Morphe). Релизы: https://github.com/DenHaIz/Tube_DPI/releases
 
 ## Tube
@@ -41,7 +41,7 @@ byedpi собирается исполняемым файлом, а не биб�
 ```powershell
 git submodule update --init --recursive
 . .\env.ps1
-.\gradlew.bat testDebugUnitTest                  # логика (Robolectric)
+.\gradlew.bat testDebugUnitTest                  # логика и переходы плеера (Robolectric)
 .\gradlew.bat :app:testDebugUnitTest -Pscreenshots   # скриншоты → app\build\outputs\roborazzi
 .\gradlew.bat :app:lintDebug :app:assembleRelease
 .\gradlew.bat :client:testDebugUnitTest -Pscreenshots   # скриншоты Tube Player
